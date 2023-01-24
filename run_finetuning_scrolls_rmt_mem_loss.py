@@ -74,6 +74,8 @@ parser.add_argument('--backbone_cls', type=str, default=None,
 parser.add_argument('--model_type', type=str, default='encoder-decoder',
                     help='model type, encoder, encoder-decoder, decoder, affects preprocessing '
                          '(default: encoder-decoder)')
+parser.add_argument('--reconstruction_loss_coef', type=float, default=None,
+                    help='amount of reconstuction loss in total loss')
 
 
 # Aydar # RMT args 
@@ -282,6 +284,7 @@ if __name__ == '__main__':
             'num_mem_tokens': args.num_mem_tokens, 
             'max_n_segments': args.max_n_segments,
             # 'segment_ordering': args.segment_ordering,
+            'reconstruction_loss_coef': args.reconstruction_loss_coef,
             'input_size': args.input_size,
             'bptt_depth': args.bptt_depth, 
             'sum_loss': args.sum_loss,

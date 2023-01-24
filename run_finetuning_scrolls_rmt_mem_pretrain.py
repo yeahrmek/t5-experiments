@@ -3,6 +3,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
+import copy
 
 from megatron.data.dataset_utils import get_indexed_dataset_
 
@@ -74,6 +75,10 @@ parser.add_argument('--backbone_cls', type=str, default=None,
 parser.add_argument('--model_type', type=str, default='encoder-decoder',
                     help='model type, encoder, encoder-decoder, decoder, affects preprocessing '
                          '(default: encoder-decoder)')
+parser.add_argument('--reconstruction_loss_coef', type=float, default=None,
+                    help='amount of reconstuction loss in total loss')
+parser.add_argument('--memory_pretrain_iters', type=int, default=1000,
+                    help='number of steps before training with reconstruction_loss_coef=1')
 
 
 # Aydar # RMT args 
@@ -282,6 +287,7 @@ if __name__ == '__main__':
             'num_mem_tokens': args.num_mem_tokens, 
             'max_n_segments': args.max_n_segments,
             # 'segment_ordering': args.segment_ordering,
+            'reconstruction_loss_coef': args.reconstruction_loss_coef,
             'input_size': args.input_size,
             'bptt_depth': args.bptt_depth, 
             'sum_loss': args.sum_loss,
@@ -380,7 +386,18 @@ if __name__ == '__main__':
                       batch_metrics_fn=batch_metrics_fn,
                       generate_kwargs=generate_kwargs if args.use_generate_on_valid else {})
 
+    pretrain_args = copy.deepcopy(args)
+    pretrain_args.iters = pretrain_args.memory_pretrain_iters
+    pre_trainer = Trainer(pretrain_args, model, optimizer, train_dataloader, valid_dataloader, train_sampler,
+                      keep_for_metrics_fn=keep_for_metrics_fn, metrics_fn=metrics_fn,
+                      ###booydar
+                      batch_metrics_fn=batch_metrics_fn,
+                      generate_kwargs=generate_kwargs if args.use_generate_on_valid else {})
+
     if not args.validate_only:
+        # memory pre-train
+        pre_trainer.train() 
+        hvd.barrier()
         # train loop
         trainer.train()
         # make sure all workers are done

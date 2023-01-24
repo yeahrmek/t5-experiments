@@ -1,11 +1,8 @@
 import math
-import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import List, Optional, Tuple, Union
 from transformers import PreTrainedModel, AutoModel
-
-from modeling_t5 import T5LayerNorm 
 
 
 class RMTEncoderDecoderForConditionalGeneration():
@@ -38,9 +35,6 @@ class RMTEncoderDecoderForConditionalGeneration():
     def extend_word_embeddings(self, num_mem_tokens):
         vocab_size = self.model.encoder.embed_tokens.weight.shape[0]
         extended_vocab_size = vocab_size + num_mem_tokens
-        self.embeddings = self.model.encoder.embed_tokens
-        # print('\n\n\nself.embeddings.shape', self.embeddings.weight.shape)
-        # mean_std = np.mean([w.std() for w in self.embeddings.weight.detach()])
         self.num_mem_tokens = num_mem_tokens
         self.mem_token_ids = torch.arange(vocab_size, vocab_size + num_mem_tokens)
         self.resize_token_embeddings(extended_vocab_size)
@@ -49,24 +43,12 @@ class RMTEncoderDecoderForConditionalGeneration():
         mem_start_ind = 1 if self.bos_token is not None else 0
         self.memory_position = range(mem_start_ind, mem_start_ind + num_mem_tokens)
 
-        self.memory_layer_norm = T5LayerNorm(self.config.d_model, eps=self.config.layer_norm_epsilon)
-
-        ## scale memory embeddings
-        # print('self.embeddings.shape', self.embeddings.weight.shape)
-        # print('mem token ids:', self.mem_token_ids)
-        # print('embeddings.weight[mem_token_ids]', self.embeddings.weight[self.mem_token_ids][0, :10])
-        # print('mult coeff ', mean_std)
-        # self.embeddings.weight.data[self.mem_token_ids] = self.embeddings.weight.detach().cpu().data[self.mem_token_ids] * mean_std
-        # print('embeddings.weight scaled', self.embeddings.weight[self.mem_token_ids][0, :10])
-
 
     def __call__(self, input_ids, **kwargs):
-        # print('\n\nembeddings.weight scaled in call', self.embeddings.weight[self.mem_token_ids][0, :10])
         memory = self.set_memory()
         memory = memory.repeat(input_ids.shape[0], 1, 1)
         segmented = self.pad_and_segment(input_ids)
         
-        out_metrics = {}
         losses = []
         for seg_num, segment_input_ids in enumerate(segmented):                
             if (self.rmt_config['bptt_depth'] > -1) and (len(segmented) - seg_num > self.rmt_config['bptt_depth']): 
@@ -91,29 +73,15 @@ class RMTEncoderDecoderForConditionalGeneration():
 
             out = self.model.forward(**seg_kwargs)
             memory[non_empty_mask] = out.encoder_hidden_states[-1][:, self.memory_position]
-
-            out_metrics[f'!log_memory_mean_seg_{seg_num}'] = memory.data.mean()
-            out_metrics[f'!log_memory_std_seg_{seg_num}'] = memory.data.std()
-            out_metrics[f'!log_memory_l2_seg_{seg_num}'] = memory.data.norm()
-            out_metrics[f'!log_memory0_mean_seg_{seg_num}'] = memory.data[0].mean()
-            out_metrics[f'!log_memory0_std_seg_{seg_num}'] = memory.data[0].std()
-            out_metrics[f'!log_memory0_l2_seg_{seg_num}'] = memory.data[0].norm()
-
-            self.memory_layer_norm.to(device=self.device)
-            normalized_hidden_states = self.memory_layer_norm(out.encoder_hidden_states[-1])
-            memory[non_empty_mask] = normalized_hidden_states[:, self.memory_position]
-
-            out_metrics[f'!log_norm_memory_mean_seg_{seg_num}'] = memory.data.mean()
-            out_metrics[f'!log_norm_memory_std_seg_{seg_num}'] = memory.data.std()
-            out_metrics[f'!log_norm_memory_l2_seg_{seg_num}'] = memory.data.norm()
-            out_metrics[f'!log_norm_memory0_mean_seg_{seg_num}'] = memory.data[0].mean()
-            out_metrics[f'!log_norm_memory0_std_seg_{seg_num}'] = memory.data[0].std()
-            out_metrics[f'!log_norm_memory0_l2_seg_{seg_num}'] = memory.data[0].norm()
+            out[f'!log_seg_{seg_num}_memory_mean'] = memory.data.mean()
+            out[f'!log_seg_{seg_num}_memory_std'] = memory.data.std()
+            out[f'!log_seg_{seg_num}_memory_l2'] = memory.data.norm()
+            out[f'!log_seg_{seg_num}_memory0_mean'] = memory.data[0].mean()
+            out[f'!log_seg_{seg_num}_memory0_std'] = memory.data[0].std()
+            out[f'!log_seg_{seg_num}_memory0_l2'] = memory.data[0].norm()
 
             losses.append(out['loss'])
             
-        for key in out_metrics:
-            out[key] = out_metrics[key]
 
         out['!log_out_token_mean'] = out.encoder_hidden_states[-1].data[-2].mean()
         out['!log_out_token_std'] = out.encoder_hidden_states[-1].data[-2].std()
@@ -131,6 +99,12 @@ class RMTEncoderDecoderForConditionalGeneration():
         if self.rmt_config['sum_loss']:
             out['loss'] = torch.stack(losses).sum(dim=0)
         
+        # out['!log_memory_mean'] = memory.data.mean()
+        # out['!log_memory_std'] = memory.data.std()
+        # out['!log_memory_l2'] = memory.data.norm()
+        # out['!log_memory0_mean'] = memory.data[0].mean()
+        # out['!log_memory0_std'] = memory.data[0].std()
+        # out['!log_memory0_l2'] = memory.data[0].norm()
         
         mem_token_ids = self.mem_token_ids.to(device=self.device)
         memory_tokens = self.embeddings(mem_token_ids)
@@ -140,7 +114,7 @@ class RMTEncoderDecoderForConditionalGeneration():
         out['!log_memory_tokens0_mean'] = memory_tokens.data[0].mean()
         out['!log_memory_tokens0_std'] = memory_tokens.data[0].std()
         out['!log_memory_tokens0_l2'] = memory_tokens.data[0].norm()
-
+        
         out['!log_some_token_mean'] = self.embeddings.weight.data[123].mean()
         out['!log_some_token_std'] = self.embeddings.weight.data[123].std()
         out['!log_some_token_l2'] = self.embeddings.weight.data[123].norm()
@@ -184,10 +158,7 @@ class RMTEncoderDecoderForConditionalGeneration():
                         seg_kwargs.pop(param)
                         
                 out = self.model.encoder(**seg_kwargs)
-
-                self.memory_layer_norm.to(device=self.device)
-                normalized_hidden_states = self.memory_layer_norm(out.last_hidden_state)
-                memory[non_empty_mask] = normalized_hidden_states[:, self.memory_position]
+                memory[non_empty_mask] = out.last_hidden_state[:, self.memory_position]
         
         return out
 

@@ -15,7 +15,8 @@ import datasets
 from huggingface_hub import hf_hub_download
 from sklearn.metrics import f1_score, accuracy_score
 
-from lm_experiments_tools import Trainer, TrainerArgs
+from lm_experiments_tools import TrainerArgs
+from lm_experiments_tools.trainer_repeat_question import Trainer
 
 
 load_dotenv()
@@ -181,7 +182,8 @@ if __name__ == '__main__':
 
         def collate_fn(batch):
             # cut too long strings because they may slow down tokenization
-            inputs = [b['input'][:args.input_seq_len * 10] for b in batch]
+            inputs = [b['input'][b['input'].index('\n'):][:args.input_seq_len * 10] for b in batch]
+            questions = [b['input'].split('\n')[0] for b in batch]
             if 'outputs' in batch[0]:
                 # if we have more than 1 label per example (only in valid) take only one of them
                 # to compute loss on valid
@@ -191,11 +193,15 @@ if __name__ == '__main__':
             if args.input_prefix:
                 inputs = [args.input_prefix + inp for inp in inputs]
             features = tokenizer.batch_encode_plus(list(inputs), max_length=args.input_seq_len, return_tensors='pt',
-                                                   **encode_plus_kwargs)
+                                                **encode_plus_kwargs)
+            
+            question_features = tokenizer.batch_encode_plus(list(questions), max_length=args.input_seq_len, return_tensors='pt',
+                                                    **encode_plus_kwargs)
             with tokenizer.as_target_tokenizer():
                 labels = tokenizer.batch_encode_plus(list(labels), max_length=args.target_seq_len, return_tensors='pt',
-                                                     **encode_plus_kwargs).input_ids
+                                                    **encode_plus_kwargs).input_ids
             labels[labels == tokenizer.pad_token_id] = -100
+            features['question'] = question_features['input_ids']
             features['labels'] = labels
             features['id'] = [b['id'] for b in batch]
             if 'outputs' in batch[0]:
@@ -204,6 +210,7 @@ if __name__ == '__main__':
                 features['target_text'] = [b['output'] for b in batch]
             if 'global_attention_mask' in features:
                 raise RuntimeError('What global attention mask for Longformer and LongformerEncoder-Decoder should be?')
+            # print('features ', features.keys())
             return features
 
     elif args.model_type == 'encoder' and args.task_name == 'contract_nli':

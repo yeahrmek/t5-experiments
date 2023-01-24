@@ -1,12 +1,15 @@
 import math
-import numpy as np
 import torch
 import torch.nn.functional as F
 from typing import List, Optional, Tuple, Union
 from transformers import PreTrainedModel, AutoModel
 
-from modeling_t5 import T5LayerNorm 
+import re
+import math
+import copy
+import types
 
+from torch.nn import BCELoss
 
 class RMTEncoderDecoderForConditionalGeneration():
     def __init__(self, base_model, **rmt_kwargs):
@@ -38,9 +41,6 @@ class RMTEncoderDecoderForConditionalGeneration():
     def extend_word_embeddings(self, num_mem_tokens):
         vocab_size = self.model.encoder.embed_tokens.weight.shape[0]
         extended_vocab_size = vocab_size + num_mem_tokens
-        self.embeddings = self.model.encoder.embed_tokens
-        # print('\n\n\nself.embeddings.shape', self.embeddings.weight.shape)
-        # mean_std = np.mean([w.std() for w in self.embeddings.weight.detach()])
         self.num_mem_tokens = num_mem_tokens
         self.mem_token_ids = torch.arange(vocab_size, vocab_size + num_mem_tokens)
         self.resize_token_embeddings(extended_vocab_size)
@@ -48,27 +48,51 @@ class RMTEncoderDecoderForConditionalGeneration():
         
         mem_start_ind = 1 if self.bos_token is not None else 0
         self.memory_position = range(mem_start_ind, mem_start_ind + num_mem_tokens)
+        
+        self.override_encoder_forward()
+        
+    
+    def override_encoder_forward(self):
+        memory_forward_func, memory_layers, share_memory_layers = \
+                self.rmt_config.get('memory_forward_func'), self.rmt_config.get('memory_layers'), self.rmt_config.get('share_memory_layers')
 
-        self.memory_layer_norm = T5LayerNorm(self.config.d_model, eps=self.config.layer_norm_epsilon)
+        if memory_forward_func is not None:
+            new_forward = lambda *args, **kwargs: memory_forward_func(*args, **kwargs, rmt_parent=self)
+            self.base_model.encoder.forward = types.MethodType(new_forward, self.base_model.encoder)
 
-        ## scale memory embeddings
-        # print('self.embeddings.shape', self.embeddings.weight.shape)
-        # print('mem token ids:', self.mem_token_ids)
-        # print('embeddings.weight[mem_token_ids]', self.embeddings.weight[self.mem_token_ids][0, :10])
-        # print('mult coeff ', mean_std)
-        # self.embeddings.weight.data[self.mem_token_ids] = self.embeddings.weight.detach().cpu().data[self.mem_token_ids] * mean_std
-        # print('embeddings.weight scaled', self.embeddings.weight[self.mem_token_ids][0, :10])
+        if memory_layers is None:
+            self.memory_layers = None
+        else:
+            if memory_layers == 'all':
+                memory_layers = range(len(self.model.encoder.block))
+            else:
+                raise NotImplementedError
+                
+            if share_memory_layers:
+                memory_layer = copy.deepcopy(self.model.encoder.block[0])
+                self.memory_layers = [memory_layer for _ in range(len(memory_layers))]
+                for n, p in memory_layer.named_parameters():
+                    param_name = re.sub('\.', '_', f'memory_{n}')
+                    self.register_parameter(param_name, p)
+            else:
+                self.memory_layers = [copy.deepcopy(self.model.encoder.block[int(l)]) for l in memory_layers]
+                for ln, layer in enumerate(self.memory_layers):
+                    for n, p in layer.named_parameters():
+                        param_name = re.sub('\.', '_', f'{ln}_memory_{n}')
+                        self.register_parameter(param_name, p)
+
+        self.reconstruction_cls = torch.nn.Linear((self.num_mem_tokens + 1) * self.config.d_model, self.rmt_config['max_n_segments']).to(device=self.device)
+        for n, p in self.reconstruction_cls.named_parameters():
+            self.register_parameter(f'reconstruction_cls_{n}', p)
 
 
     def __call__(self, input_ids, **kwargs):
-        # print('\n\nembeddings.weight scaled in call', self.embeddings.weight[self.mem_token_ids][0, :10])
         memory = self.set_memory()
         memory = memory.repeat(input_ids.shape[0], 1, 1)
         segmented = self.pad_and_segment(input_ids)
         
-        out_metrics = {}
-        losses = []
-        for seg_num, segment_input_ids in enumerate(segmented):                
+        losses = {}
+        for seg_num, segment_input_ids in enumerate(segmented):
             if (self.rmt_config['bptt_depth'] > -1) and (len(segmented) - seg_num > self.rmt_config['bptt_depth']): 
                 memory = memory.detach()
 
@@ -78,46 +102,25 @@ class RMTEncoderDecoderForConditionalGeneration():
             non_empty_mask = [s is not None for s in segment_input_ids]
             if sum(non_empty_mask) == 0:
                 continue
-            input_ids = torch.stack([s for s in segment_input_ids if s is not None])
+            input_ids = torch.stack(segment_input_ids)[non_empty_mask]
             attention_mask = self.get_attention_mask(input_ids)
             token_type_ids = self.get_token_type_ids(input_ids)
             seg_kwargs['labels'] = seg_kwargs['labels'][non_empty_mask]
 
             inputs_embeds = self.embeddings(input_ids)
             inputs_embeds[:, self.memory_position] = memory[non_empty_mask]
-
+    
             seg_kwargs['inputs_embeds'] = inputs_embeds
             seg_kwargs['attention_mask'] = attention_mask
-
+                
             out = self.model.forward(**seg_kwargs)
             memory[non_empty_mask] = out.encoder_hidden_states[-1][:, self.memory_position]
 
-            out_metrics[f'!log_memory_mean_seg_{seg_num}'] = memory.data.mean()
-            out_metrics[f'!log_memory_std_seg_{seg_num}'] = memory.data.std()
-            out_metrics[f'!log_memory_l2_seg_{seg_num}'] = memory.data.norm()
-            out_metrics[f'!log_memory0_mean_seg_{seg_num}'] = memory.data[0].mean()
-            out_metrics[f'!log_memory0_std_seg_{seg_num}'] = memory.data[0].std()
-            out_metrics[f'!log_memory0_l2_seg_{seg_num}'] = memory.data[0].norm()
+            losses[f'loss_{seg_num}'] = out['loss']
 
-            self.memory_layer_norm.to(device=self.device)
-            normalized_hidden_states = self.memory_layer_norm(out.encoder_hidden_states[-1])
-            memory[non_empty_mask] = normalized_hidden_states[:, self.memory_position]
-
-            out_metrics[f'!log_norm_memory_mean_seg_{seg_num}'] = memory.data.mean()
-            out_metrics[f'!log_norm_memory_std_seg_{seg_num}'] = memory.data.std()
-            out_metrics[f'!log_norm_memory_l2_seg_{seg_num}'] = memory.data.norm()
-            out_metrics[f'!log_norm_memory0_mean_seg_{seg_num}'] = memory.data[0].mean()
-            out_metrics[f'!log_norm_memory0_std_seg_{seg_num}'] = memory.data[0].std()
-            out_metrics[f'!log_norm_memory0_l2_seg_{seg_num}'] = memory.data[0].norm()
-
-            losses.append(out['loss'])
-            
-        for key in out_metrics:
-            out[key] = out_metrics[key]
-
-        out['!log_out_token_mean'] = out.encoder_hidden_states[-1].data[-2].mean()
-        out['!log_out_token_std'] = out.encoder_hidden_states[-1].data[-2].std()
-        out['!log_out_token_l2'] = out.encoder_hidden_states[-1].data[-2].norm()
+        memory_out = out.encoder_last_hidden_state[:, self.memory_position]
+        reconstruction_loss = self.segment_reconstruction_forward(segmented, memory_out)
+        out['reconstruction_loss'] = reconstruction_loss
 
         # drop unnecessary hiddens to save memory
         if not kwargs.get('output_hidden_states'):
@@ -125,33 +128,57 @@ class RMTEncoderDecoderForConditionalGeneration():
                 if 'hidden_state' in key:
                     out[key] = None
                     
-        for i, l in enumerate(losses):
-            out[f'loss_{i}'] = l.mean()
+        for k, loss in losses.items():
+            out[k] = loss
 
         if self.rmt_config['sum_loss']:
             out['loss'] = torch.stack(losses).sum(dim=0)
         
-        
-        mem_token_ids = self.mem_token_ids.to(device=self.device)
-        memory_tokens = self.embeddings(mem_token_ids)
-        out['!log_memory_tokens_mean'] = memory_tokens.data.mean()
-        out['!log_memory_tokens_std'] = memory_tokens.data.std()
-        out['!log_memory_tokens_l2'] = memory_tokens.data.norm()
-        out['!log_memory_tokens0_mean'] = memory_tokens.data[0].mean()
-        out['!log_memory_tokens0_std'] = memory_tokens.data[0].std()
-        out['!log_memory_tokens0_l2'] = memory_tokens.data[0].norm()
+        rec_coef = self.rmt_config['reconstruction_loss_coef']
+        out['loss'] = reconstruction_loss * rec_coef + out['loss'] * (1 - rec_coef)
 
-        out['!log_some_token_mean'] = self.embeddings.weight.data[123].mean()
-        out['!log_some_token_std'] = self.embeddings.weight.data[123].std()
-        out['!log_some_token_l2'] = self.embeddings.weight.data[123].norm()
-        # print('\n\n\n')
-        # print(out.keys())
-        # print([out[k] for k in out.keys() if '!log' in k])
-        
         return out
+    
+
+    def segment_reconstruction_forward(self, segmented, memory_out):
+        batch_size = memory_out.shape[0]
+        vocab_size = self.config.vocab_size
+        n_tokens = self.rmt_config.get('memory_loss_n_tokens', 1000)
+        random_token_inds = torch.randperm(vocab_size)[:n_tokens]
+
+        checkbox = self.encoder.embed_tokens.weight.detach()
+        checkbox = checkbox[random_token_inds]
+        checkbox = checkbox.reshape((1, checkbox.shape[0], 1, checkbox.shape[1]))
+        checkbox = checkbox.repeat((batch_size, 1, 1, 1))
+
+        memory_checkbox = memory_out.reshape(memory_out.shape[0], 1, *memory_out.shape[1:]).repeat(1, checkbox.shape[1], 1, 1)
+
+        # bs x d_vocab x (num_mem_tokens + 1) x d_model
+        checkbox = torch.cat((checkbox, memory_checkbox), dim=2)
+        appearance = torch.zeros((batch_size, vocab_size, self.rmt_config['max_n_segments'])).to(device=self.device)
+
+        for seg_num, batch_segment in enumerate(segmented):
+            for bn, segment in enumerate(batch_segment):
+                if segmented[seg_num][bn] is not None:
+                    appearance[bn, :, seg_num] = appearance[bn, :, seg_num].index_fill(0, segmented[seg_num][bn], 1)
+
+        appearance = appearance[:, random_token_inds]
+        appearance_reshaped = appearance.reshape(appearance.shape[0] * appearance.shape[1], -1).view(-1)
+        checkbox_reshaped = checkbox.reshape(checkbox.shape[0] * checkbox.shape[1], -1)
+
+        cls_out = self.reconstruction_cls(checkbox_reshaped)
+
+        sigmoid = torch.nn.Sigmoid()
+        logits = sigmoid(cls_out.view(-1))
+
+        loss_fct = BCELoss(reduction='none')
+        loss = loss_fct(logits, appearance_reshaped)
+
+        reconstruction_loss = loss[appearance_reshaped == 0].mean() + loss[appearance_reshaped == 1].mean()
+        return reconstruction_loss
 
 
-    def generate(self, input_ids, **kwargs):        
+    def generate(self, input_ids, **kwargs):
         memory = self.set_memory()
         memory = memory.repeat(input_ids.shape[0], 1, 1)
         segmented = self.pad_and_segment(input_ids)
@@ -184,10 +211,7 @@ class RMTEncoderDecoderForConditionalGeneration():
                         seg_kwargs.pop(param)
                         
                 out = self.model.encoder(**seg_kwargs)
-
-                self.memory_layer_norm.to(device=self.device)
-                normalized_hidden_states = self.memory_layer_norm(out.last_hidden_state)
-                memory[non_empty_mask] = normalized_hidden_states[:, self.memory_position]
+                memory[non_empty_mask] = out.last_hidden_state[:, self.memory_position]
         
         return out
 
