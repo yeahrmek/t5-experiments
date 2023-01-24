@@ -60,7 +60,7 @@ do
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_log.py \
+horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt.py \
         --task_name $TASK_NAME \
         --model_path ../runs/finetune/debug/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_ln_end/run_$N \
         --from_pretrained $MODEL_NAME \

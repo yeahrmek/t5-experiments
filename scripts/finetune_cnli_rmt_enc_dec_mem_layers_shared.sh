@@ -1,21 +1,3 @@
-# PREFIX="summarize: "
-
-# SCROLLS TASKS (train/valid/test)
-# gov_report (17457/972/973) 10ep ~5500 iters with bs 32
-# summ_screen_fd (3673/338/337) 10ep ~1150 iters with bs 32
-# qmsum (1257/272/281) 20ep ~800 iters with bs 32
-# narrative_qa (55003/5878/10306) 2ep ~3500 iters with bs 32
-# qasper (2567/1726/1399) 20ep ~1605 iters with bs 32
-# quality (2523/2086/2128) 20ep ~1600 iters with bs 32
-# contract_nli (7191/1037/2091) 20ep ~4500 iters with bs 32
-
-# BART 256 512 1024
-# LED 1024 4096 16384
-# SRC_LEN=256
-# BART 1024
-# LED 1024
-# 
-
 #!/usr/bin/env bash
 # CUDA_VISIBLE_DEVICES=1,2 NP=2 ./test_bert_sparse_pretrain_train_valid.sh
 set -e
@@ -24,23 +6,24 @@ cd ..
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 
-MODEL_NAME=t5-base
 MODEL_TYPE=encoder-decoder
-MODEL_CLS=modeling_rmt_enc_dec_mem_layers_log:RMTEncoderDecoderForConditionalGeneration
+MODEL_NAME=t5-base
+MODEL_CLS=modeling_rmt_enc_dec_mem_layers_shared:RMTEncoderDecoderForConditionalGeneration
 BACKBONE_CLS=transformers:T5ForConditionalGeneration
-TASK_NAME=qasper
+TASK_NAME=contract_nli
+METRIC=exact_match
 
-ITERS=5000
+ITERS=4000
 TBS=32
-BS=2
+BS=8
 
 TGT_LEN=1024
 INPUT_SEQ_LEN=1024
 
-MAX_N_SEGMENTSS=(3 3 3 )
-MEMORY_SIZES=(1 10 25)
+MAX_N_SEGMENTSS=(2)
+MEMORY_SIZES=(10)
 
-for N in 1
+for N in 1 2
 do
 
 for (( j=0; j<${#MEMORY_SIZES[@]}; j++ ))
@@ -51,7 +34,6 @@ MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j]}
 for SEGMENT_ORDERING in regular
 do
 
-METRIC=f1
 SCHEDULER=linear
 
 for LR in 5e-05
@@ -60,9 +42,9 @@ do
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_log.py \
+horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/debug/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_mem_layers/run_$N \
+        --model_path ../runs/debug/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_mem_layers_shared/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
@@ -84,7 +66,9 @@ horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_log.py \
         --optimize_metric $METRIC --optimize_mode max \
         --show_valid_examples 5 \
         --early_stopping_patience 15 \
-        --seed $(($N+42))
+        --optimize_metric $METRIC --optimize_mode max \
+        --seed $(($N+42)) \
+        --clip_grad_value 5.0
 done
 done
 done

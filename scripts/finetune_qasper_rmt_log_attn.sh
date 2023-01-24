@@ -26,7 +26,7 @@ CUDA_LAUNCH_BLOCKING=1
 
 MODEL_NAME=t5-base
 MODEL_TYPE=encoder-decoder
-MODEL_CLS=modeling_rmt_enc_dec_log:RMTEncoderDecoderForConditionalGeneration
+MODEL_CLS=modeling_rmt_enc_dec:RMTEncoderDecoderForConditionalGeneration
 BACKBONE_CLS=transformers:T5ForConditionalGeneration
 TASK_NAME=qasper
 

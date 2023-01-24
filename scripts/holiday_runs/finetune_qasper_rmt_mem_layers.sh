@@ -19,7 +19,7 @@
 #!/usr/bin/env bash
 # CUDA_VISIBLE_DEVICES=1,2 NP=2 ./test_bert_sparse_pretrain_train_valid.sh
 set -e
-cd ..
+cd ../..
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
@@ -32,13 +32,13 @@ TASK_NAME=qasper
 
 ITERS=5000
 TBS=32
-BS=8
+BS=2
 
 TGT_LEN=1024
-INPUT_SEQ_LEN=512
+INPUT_SEQ_LEN=2100
 
-MAX_N_SEGMENTSS=(1 1 1)
-MEMORY_SIZES=(1 10 25)
+MAX_N_SEGMENTSS=(2 3 4 2 3 4)
+MEMORY_SIZES=(10 10 10 25 25 25)
 
 for N in 1 2 3
 do

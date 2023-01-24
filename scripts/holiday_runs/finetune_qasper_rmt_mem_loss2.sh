@@ -19,28 +19,32 @@
 #!/usr/bin/env bash
 # CUDA_VISIBLE_DEVICES=1,2 NP=2 ./test_bert_sparse_pretrain_train_valid.sh
 set -e
-cd ..
+cd ../..
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 
 MODEL_NAME=t5-base
 MODEL_TYPE=encoder-decoder
-MODEL_CLS=modeling_rmt_enc_dec_mem_layers:RMTEncoderDecoderForConditionalGeneration
+MODEL_CLS=modeling_rmt_enc_dec_mem_loss:RMTEncoderDecoderForConditionalGeneration
 BACKBONE_CLS=transformers:T5ForConditionalGeneration
 TASK_NAME=qasper
 
 ITERS=5000
 TBS=32
-BS=8
+BS=2
+
 
 TGT_LEN=1024
-INPUT_SEQ_LEN=512
+INPUT_SEQ_LEN=1024
 
-MAX_N_SEGMENTSS=(1 1 1)
-MEMORY_SIZES=(1 10 25)
+MAX_N_SEGMENTSS=(3 4)
+MEMORY_SIZES=(10 10)
 
-for N in 1 2 3
+for N in 1 2
+do
+
+for REC_COEF in 0.001 0.01
 do
 
 for (( j=0; j<${#MEMORY_SIZES[@]}; j++ ))
@@ -60,9 +64,9 @@ do
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt.py \
+horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_mem_loss.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/debug/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_mem_layers/run_$N \
+        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_mem_loss_rc${REC_COEF}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
@@ -74,6 +78,7 @@ horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt.py \
         --num_mem_tokens $MEMORY_SIZE \
         --max_n_segments $MAX_N_SEGMENTS \
         --segment_ordering $SEGMENT_ORDERING \
+        --reconstruction_loss_coef $REC_COEF \
         --bptt_depth -1 \
         --batch_size $BS --gradient_accumulation_steps $(($TBS/($BS*$NP))) \
         --iters $ITERS \
@@ -85,6 +90,7 @@ horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt.py \
         --show_valid_examples 5 \
         --early_stopping_patience 15 \
         --seed $(($N+42))
+done
 done
 done
 done
