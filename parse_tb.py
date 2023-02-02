@@ -17,10 +17,12 @@ def parse_tensorboard(path, scalars, silent=SILENT):
     )
     _absorb_print = ea.Reload()
     # make sure the scalars are in the event accumulator tags
-    assert all(
-        s in ea.Tags()["scalars"] for s in scalars
-    ),"" if silent else "some scalars were not found in the event accumulator"
-    return {k: pd.DataFrame(ea.Scalars(k)) for k in scalars}
+    # assert all(
+    #     s in ea.Tags()["scalars"] for s in scalars
+    # ),"" if silent else "some scalars were not found in the event accumulator"
+    # return {k: pd.DataFrame(ea.Scalars(k)) for k in scalars}
+    found_scalars = [s for s in scalars if s in ea.Tags()['scalars']]
+    return {k: pd.DataFrame(ea.Scalars(k)) for k in found_scalars}
 
 
 def parse_to_csv(path, out_path, target_cols, metric_names, silent=SILENT):
@@ -53,7 +55,9 @@ def parse_to_csv(path, out_path, target_cols, metric_names, silent=SILENT):
             expr[f'best_valid_{m}'] = metrics[f'{m}/iterations/valid']['value'].max()
 
         # print(parse_tensorboard(str(p), ['loss/iterations/train'])['loss/iterations/train'].step)
-        expr['num_steps'] = parse_tensorboard(str(p), ['loss/iterations/train'])['loss/iterations/train'].step.max()
+        parsed = parse_tensorboard(str(p), ['loss/iterations/train'])
+        if 'loss/iterations/train' in parsed:
+            expr['num_steps'] = parsed['loss/iterations/train'].step.max()
         experiments += [expr]
 
     experiments = pd.DataFrame(experiments)
