@@ -26,7 +26,7 @@ CUDA_LAUNCH_BLOCKING=1
 
 MODEL_NAME=t5-base
 MODEL_TYPE=encoder-decoder
-MODEL_CLS=modeling_rmt_enc_dec_ilm_mem_layersV2:RMTEncoderDecoderForConditionalGeneration
+MODEL_CLS=modeling_rmt_enc_dec_ilm_mem_layersV5_trainable:RMTEncoderDecoderForConditionalGeneration
 BACKBONE_CLS=transformers:T5ForConditionalGeneration
 TASK_NAME=qasper
 
@@ -41,7 +41,7 @@ INPUT_SEQ_LEN=1200
 MAX_N_SEGMENTSS=(2)
 MEMORY_SIZES=(10)
 
-for N in 3
+for N in 1 2
 do
 
 for (( j=0; j<${#MEMORY_SIZES[@]}; j++ ))
@@ -63,8 +63,8 @@ echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
 horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_framework.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_ilm_mem_layers_shared_mem_prefixV4_1by1/run_$N \
-        --memory_forward_implementation ./rmt_utils/layer_mem_mem_layersV4_1by1/ \
+        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_ilm_mem_layers_shared_mem_prefixV5_trainable/run_$N \
+        --memory_forward_implementation ./rmt_utils/layer_mem_mem_layersV4/ \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
@@ -78,7 +78,6 @@ horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_framework.py \
         --segment_ordering $SEGMENT_ORDERING \
         --memory_layers all \
         --share_memory_layers \
-        --save_best \
         --bptt_depth -1 \
         --batch_size $BS --gradient_accumulation_steps $(($TBS/($BS*$NP))) \
         --iters $ITERS \
@@ -94,8 +93,8 @@ horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_framework.py \
 echo NO MEMORY LAYERS
 horovodrun --gloo -np $NP python run_finetuning_scrolls_rmt_framework.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_ilm_mem_prefixV4_1by1/run_$N \
-        --memory_forward_implementation ./rmt_utils/layer_mem_mem_layersV4_1by1/ \
+        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_ilm_mem_prefixV4/run_$N \
+        --memory_forward_implementation ./rmt_utils/layer_mem_mem_layersV4/ \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
