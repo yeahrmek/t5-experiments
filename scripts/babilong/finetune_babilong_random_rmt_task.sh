@@ -1,38 +1,38 @@
 #!/usr/bin/env bash
 # CUDA_VISIBLE_DEVICES=1,2 NP=2 ./test_bert_sparse_pretrain_train_valid.sh
 set -e
-cd ..
+cd ../..
 
 CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 
 MODEL_TYPE=encoder
 BACKBONE_CLS=transformers:AutoModelForSequenceClassification
-TASK_NAME=babilong
+TASK_NAME=babilong_random
 METRIC=exact_match
 
 ITERS=3000
 TBS=32
-BS=8
+BS=1
 
 TGT_LEN=512
-INPUT_SEQ_LEN=499
+MODEL_INPUT_SIZE=512
 
-MODEL_INPUT_SIZES=(263 180 138 )
-MAX_N_SEGMENTSS=(2 3 4 )
-MEMORY_SIZES=(10 10 10 )
+INPUT_SEQ_LENS=(1996 1497 998)
+MAX_N_SEGMENTSS=(4 3 2)
+MEMORY_SIZES=(10 10 10)
 
-for N in 4 5
+for N in 1
 do
 
-for MODEL_NAME in bert-base-cased roberta-base
+for MODEL_NAME in bert-base-cased 
 do
 
 for (( j=0; j<${#MEMORY_SIZES[@]}; j++ ))
 do
 MEMORY_SIZE=${MEMORY_SIZES[j]}
 MAX_N_SEGMENTS=${MAX_N_SEGMENTSS[j]} 
-MODEL_INPUT_SIZE=${MODEL_INPUT_SIZES[j]}
+INPUT_SEQ_LEN=${INPUT_SEQ_LENS[j]}
 
 for SEGMENT_ORDERING in regular
 do
@@ -46,8 +46,8 @@ MODEL_CLS=modeling_rmt:RMTEncoderForSequenceClassification
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MODEL_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-horovodrun --gloo -np $NP python run_finetuning_babilong_rmt.py \
-        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}/run_$N \
+horovodrun --gloo -np $NP python run_finetuning_babilong_random_rmt.py \
+        --model_path ../runs/curriculum_task/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
@@ -59,6 +59,7 @@ horovodrun --gloo -np $NP python run_finetuning_babilong_rmt.py \
         --max_n_segments $MAX_N_SEGMENTS \
         --segment_ordering $SEGMENT_ORDERING \
         --bptt_depth -1 \
+        --random_position \
         --batch_size $BS --gradient_accumulation_steps $(($TBS/($BS*$NP))) \
         --iters $ITERS \
         --optimizer AdamW  --weight_decay 0.001 \

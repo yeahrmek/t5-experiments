@@ -88,14 +88,6 @@ def parse_to_df(path, target_cols, metric_names, silent=SILENT):
 
 # # CNLI
 
-# path = Path('/home/bulatov/bulatov/RMT_light/runs/debug/contract_nli')
-# metric_names = ['exact_match']
-# target_cols = TGT_COLS + ['best_valid_exact_match']
-# out_path = 'results/contract_nli_old.csv'
-
-# df = parse_to_csv(path, out_path, target_cols, metric_names)
-# df.to_csv(out_path, index=False)
-
 
 paths = ['/home/bulatov/bulatov/RMT_light/runs/framework/contract_nli',
          '/home/bulatov/bulatov/RMT_light/runs/test/contract_nli'
@@ -106,18 +98,10 @@ metric_names = ['exact_match']
 target_cols = TGT_COLS + ['best_valid_exact_match']
 out_path = 'results/contract_nli.csv'
 
-dfs = [parse_to_df(p, target_cols, metric_names) for p in paths]
-df = pd.concat(dfs)
-df.to_csv(out_path, index=False)
-
-
-# path = Path()
-# metric_names = ['exact_match']
-# target_cols = TGT_COLS + ['best_valid_exact_match']
-# out_path = 'results/contract_nli-2.csv'
-
-# df = parse_to_csv(path, out_path, target_cols, metric_names)
+# dfs = [parse_to_df(p, target_cols, metric_names) for p in paths]
+# df = pd.concat(dfs)
 # df.to_csv(out_path, index=False)
+
 
 
 # # QAsper
@@ -127,8 +111,8 @@ metric_names = ['f1']
 target_cols = TGT_COLS + ['best_valid_f1']
 out_path = 'results/qasper.csv'
 
-df = parse_to_df(path, target_cols, metric_names)
-df.to_csv(out_path, index=False)
+# df = parse_to_df(path, target_cols, metric_names)
+# df.to_csv(out_path, index=False)
 
 
 # Babi-long
@@ -143,6 +127,23 @@ paths = [Path(p) for p in paths]
 metric_names = ['exact_match']
 target_cols = TGT_COLS + ['best_valid_exact_match']
 out_path = 'results/babilong.csv'
+
+# dfs = [parse_to_df(p, target_cols, metric_names) for p in paths]
+# df = pd.concat(dfs)
+# df.to_csv(out_path, index=False)
+
+
+# Babi-long random position
+
+paths = [
+        '/home/bulatov/bulatov/RMT_light/runs/curriculum_task/babilong_random',
+        ]
+
+# path = Path('/home/bulatov/bulatov/RMT_light/runs/')
+paths = [Path(p) for p in paths]
+metric_names = ['exact_match']
+target_cols = TGT_COLS + ['best_valid_exact_match']
+out_path = 'results/babilong_random.csv'
 
 dfs = [parse_to_df(p, target_cols, metric_names) for p in paths]
 df = pd.concat(dfs)

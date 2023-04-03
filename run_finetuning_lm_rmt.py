@@ -214,7 +214,7 @@ if __name__ == '__main__':
             'max_n_segments': args.max_n_segments,
             # 'segment_ordering': args.segment_ordering,
             'input_size': args.input_size,
-            'bptt_depth': args.bptt_depth, 
+            'k1': args.k1, 'k2': args.k2,
             'sum_loss': args.sum_loss,
             'tokenizer': tokenizer,
             'memory_forward_func': args.memory_forward_func,
@@ -246,10 +246,13 @@ if __name__ == '__main__':
 
         if args.freeze_model_weights:
             for n, p in model.named_parameters():
-                if 'memory' not in n and 'wte' not in n:
+                # if 'memory' not in n and 'wte' not in n:
+                if 'memory' not in n:
                     p.requires_grad = False
             if hvd.rank() == 0:
-                logger.info(f'Frozen moodel weights except embeddings')
+                logger.info(f'Frozen moodel weights')
+                logger.info(f'Remaining parameters: {[n for n, p in model.named_parameters() if p.requires_grad]}')
+
     
     # define optimizer
     optimizer_cls = get_optimizer(args.optimizer)

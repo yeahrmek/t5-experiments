@@ -95,6 +95,8 @@ parser.add_argument('--reconstruction_loss_coef', type=float, default=None,
 # parser.add_argument('--segment_ordering', type=str,help='????', default='regular',
 #                     choices=['regular', 'reversed', 'bidirectional', 'repeat_first', 'last_memory_only'])
 parser.add_argument('--num_valid_samples', type=int, default=None, help="number of samples for validation")
+parser.add_argument('--fact_segment', type=int, default=0, help="number of segment containing the fact")
+parser.add_argument('--random_position', action='store_true', help='choose fact seg num randomly', default=False)
 
 
 # tokenizer
@@ -241,21 +243,36 @@ if __name__ == '__main__':
                               'pad_to_multiple_of': 1}
         generate_kwargs = {}
 
-        def collate_fn(batch, input_seg_size=input_seg_size):
-            # cut too long strings because they may slow down tokenization
-            # inputs = ['[memorize] ' + b['fact'] + ' [/memorize] ' + b['input'][:args.input_seq_len * 10] for b in batch]
-            # inputs = [b['fact'] + b['input'][:args.input_seq_len * 10] for b in batch]
-            inputs = [b['fact'] + ' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
+        fact_segment = 0
+        random_position = False
+        if hasattr(args, 'fact_segment'):
+            fact_segment = args.fact_segment
+        if hasattr(args, 'random_position'):
+            random_position = args.random_position
+        
+        def collate_fn(batch, input_seg_size=input_seg_size, fact_segment=fact_segment, random_position=random_position):
+            facts = [b['fact'] for b in batch]
+            inputs = [b['input'][:args.input_seq_len * 10] for b in batch]
             questions = [b['question'] for b in batch]
             labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
             if args.input_prefix:
                 inputs = [args.input_prefix + inp for inp in inputs]
 
-            max_length = min(args.max_n_segments * input_seg_size, args.input_seq_len)
-            features = tokenizer.batch_encode_plus(list(inputs), return_tensors='pt', **encode_plus_kwargs, max_length=max_length)
+            total_input_size = args.max_n_segments * input_seg_size
+            features = tokenizer.batch_encode_plus(list(inputs), return_tensors='pt', **encode_plus_kwargs, max_length=total_input_size)
             questions = tokenizer.batch_encode_plus(list(questions), return_tensors='pt', **encode_plus_kwargs)['input_ids']
-            
+
+            if random_position:
+                fact_start_positions = np.random.randint(0, args.max_n_segments, len(batch)) * input_seg_size + 1
+            else:
+                fact_start_positions = np.ones(len(batch), dtype=int) * fact_segment * input_seg_size + 1
+
+            for i, position in enumerate(fact_start_positions):
+                fact = tokenizer.encode(facts[i], return_tensors='pt', add_special_tokens=False)[0]
+                features['input_ids'][i, position:position + len(fact)] = fact
+
             q_len = questions.shape[1] - 1
+            max_length = min(args.max_n_segments * input_seg_size, args.input_seq_len)
             features['input_ids'] = torch.cat([features['input_ids'][:, :max_length - q_len], questions[:, 1:]], dim=1)
             
             labels = np.array([labels_map[t] for t in labels])

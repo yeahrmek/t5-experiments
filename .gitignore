@@ -5,6 +5,8 @@ notebooks/
 *.py[cod]
 *$py.class
 
+modeling_rmt.py
+
 # C extensions
 *.so
 
@@ -134,3 +136,4 @@ dmypy.json
 runs/
 data/*.tsv
 tests/runs/
+notebooks/debug_rmt_bptt.ipynb

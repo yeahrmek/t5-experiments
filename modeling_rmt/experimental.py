@@ -194,11 +194,12 @@ class RMTEncoderDecoderFullMemoryLastSeg(RMTEncoderDecoderMemoryLayers):
                 if param in seg_kwargs:
                     seg_kwargs.pop(param)
                     
-            out = self.model.encoder(**seg_kwargs)
-            memory[non_empty_mask] = out.last_hidden_state[:, self.memory_position]
+            encoder_out = self.model.encoder(**seg_kwargs)
+            memory[non_empty_mask] = encoder_out.last_hidden_state[:, self.memory_position]
             memories.append(torch.clone(memory))
 
-        hidden_states = torch.cat(memories[:-1] + [out.last_hidden_state], dim=1)
-        out = self.model.generate(**seg_kwargs, encoder_hidden_states=hidden_states)
-
-        return out
+        hidden_states = torch.cat(memories[:-1] + [encoder_out.last_hidden_state], dim=1)
+        encoder_out.hidden_states = None
+        encoder_out.last_hidden_state = hidden_states
+        out = self.model.generate(encoder_outputs=encoder_out)
+        return out 
