@@ -1,11 +1,8 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
-images/
-notebooks/
 *.py[cod]
 *$py.class
 
-modeling_rmt.py
 
 # C extensions
 *.so
