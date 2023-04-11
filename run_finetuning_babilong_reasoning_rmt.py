@@ -2,6 +2,7 @@ import json
 import logging
 import sys
 import os
+import pandas as pd
 import shutil
 from pathlib import Path
 
@@ -95,7 +96,8 @@ parser.add_argument('--reconstruction_loss_coef', type=float, default=None,
 # parser.add_argument('--segment_ordering', type=str,help='????', default='regular',
 #                     choices=['regular', 'reversed', 'bidirectional', 'repeat_first', 'last_memory_only'])
 parser.add_argument('--num_valid_samples', type=int, default=None, help="number of samples for validation")
-parser.add_argument('--fact_segment', type=int, default=0, help="number of segment containing the fact")
+parser.add_argument('--fact1_segment', type=int, default=0, help="number of segment containing the fact1")
+parser.add_argument('--fact2_segment', type=int, default=0, help="number of segment containing the fact2")
 parser.add_argument('--random_position', action='store_true', help='choose fact seg num randomly', default=False)
 
 
@@ -115,51 +117,26 @@ parser.add_argument('--warmup_init', action='store_true', default=False,
 
 
 
-names = ['Mary', 'John', 'Daniel', 'Sandra']
-actions = ['moved', 'went', 'went back', 'journeyed', 'travelled']
-places = ['bathroom', 'hallway', 'garden', 'office', 'bedroom', 'kitchen']
-choices_dict = {'names': names, 'actions': actions, 'places': places}
-
-class MemoryDataset(Dataset):
-    def __init__(self, choices_dict=choices_dict, num_facts=1, split='train', dataset='quality', num_samples=None):
-        self.choices_dict = choices_dict
+class MemoryReasoningDataset(Dataset):
+    def __init__(self, split='train', dataset='quality', num_samples=None):
         self.dataset = load_dataset('tau/scrolls', dataset)[split]
-        self.num_facts = num_facts
+        self.fact_dataset = pd.read_csv('/home/bulatov/bulatov/datasets/babi/_processed/two_facts_reasoning.csv')
         self.num_samples = num_samples
 
     def __getitem__(self, ind):
-        if self.num_samples:
-            ind = np.random.randint(len(self.dataset))
-        sample = self.dataset[ind]
-        sample['fact'], sample['question'], sample['answer'] = self.generate_qa() 
+        
+        noise_ind = np.random.randint(len(self.dataset))
+        fact_ind = np.random.randint(len(self.fact_dataset))
+        sample = self.dataset[noise_ind]
+        sample.update(dict(self.fact_dataset.iloc[fact_ind]))
         return sample
     
     def __len__(self):
-        return len(self.dataset) if self.num_samples is None else self.num_samples
-
-    def generate_qa(self):
-        names, actions, places = self.choices_dict['names'], self.choices_dict['actions'], self.choices_dict['places']
-
-        np.random.shuffle(names)
-        facts, questions, answers = [], [], []
-        for fact_num, name in zip(range(self.num_facts), names):
-            action, place = np.random.choice(actions), np.random.choice(places)
-
-            facts.append(f'{name} {action} to the {place}')
-            questions.append(f'Where is {name}?')
-            answers.append(place)
-
-        facts = ', '.join(facts) + '.'
-        questions = ' '.join(questions)
-        answers = ', '.join(answers)
-        
-        return facts, questions, answers
+        return self.num_samples
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    # print('\n\n\n\n\n\n\nBs', args.batch_size)
-    # set current working dir
     args.working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(args.working_dir)
     if hvd.rank() == 0:
@@ -188,10 +165,10 @@ if __name__ == '__main__':
     if hvd.rank() == 0:
         logger.info(f'preparing dataset for babilong')
     
-    train_dataset = MemoryDataset(choices_dict, num_facts=1, split='train', dataset='quality')
-    valid_dataset = MemoryDataset(choices_dict, num_facts=1, split='validation', dataset='quality', num_samples=args.num_valid_samples)
+    train_dataset = MemoryReasoningDataset(split='train', dataset='quality', num_samples=100_000)
+    valid_dataset = MemoryReasoningDataset(split='validation', dataset='quality', num_samples=2_000)
     
-    answers = train_dataset.choices_dict['places']
+    answers = train_dataset.fact_dataset.answer.unique()
     labels_map = dict(zip(answers, range(len(answers))))
     num_labels = len(labels_map)
     if args.num_mem_tokens is None:
@@ -211,7 +188,7 @@ if __name__ == '__main__':
         # def collate_fn(batch):
         #     # cut too long strings because they may slow down tokenization
         #     # inputs = [b['fact'] + b['input'][:args.input_seq_len * 10] for b in batch]
-        #     inputs = [' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
+        #     inputs = [b['fact'] + ' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
         #     questions = [b['question'] for b in batch]
         #     labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
         #     if args.input_prefix:
@@ -243,15 +220,19 @@ if __name__ == '__main__':
                               'pad_to_multiple_of': 1}
         generate_kwargs = {}
 
-        fact_segment = 0
+        fact1_segment = 0
+        fact2_segment = 0
         random_position = False
-        if hasattr(args, 'fact_segment'):
-            fact_segment = args.fact_segment
+        if hasattr(args, 'fact1_segment'):
+            fact_segment = args.fact1_segment
+        if hasattr(args, 'fact2_segment'):
+            fact_segment = args.fact2_segment
         if hasattr(args, 'random_position'):
             random_position = args.random_position
         
-        def collate_fn(batch, input_seg_size=input_seg_size, fact_segment=fact_segment, random_position=random_position):
-            facts = [b['fact'] for b in batch]
+        def collate_fn(batch, input_seg_size=input_seg_size, fact1_segment=fact1_segment, fact2_segment=fact2_segment, random_position=random_position):
+            facts1 = [b['fact1'] for b in batch]
+            facts2 = [b['fact2'] for b in batch]
             inputs = [' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
             questions = [b['question'] for b in batch]
             labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
@@ -263,13 +244,19 @@ if __name__ == '__main__':
             questions = tokenizer.batch_encode_plus(list(questions), return_tensors='pt', **encode_plus_kwargs)['input_ids']
 
             if random_position:
-                fact_start_positions = np.random.randint(0, args.max_n_segments, len(batch)) * input_seg_size + 1
+                fact1_start_positions = np.random.randint(0, args.max_n_segments, len(batch)) * input_seg_size + 1
+                fact2_start_positions = np.random.randint(0, args.max_n_segments, len(batch)) * input_seg_size + 1
             else:
-                fact_start_positions = np.ones(len(batch), dtype=int) * fact_segment * input_seg_size + 1
+                fact1_start_positions = np.ones(len(batch), dtype=int) * fact1_segment * input_seg_size + 1
+                fact2_start_positions = np.ones(len(batch), dtype=int) * fact2_segment * input_seg_size + 1
 
-            for i, position in enumerate(fact_start_positions):
-                fact = tokenizer.encode(facts[i], return_tensors='pt', add_special_tokens=False)[0]
-                features['input_ids'][i, position:position + len(fact)] = fact
+            for i, (position1, position2) in enumerate(zip(fact1_start_positions, fact2_start_positions)):
+                fact1 = tokenizer.encode(facts1[i], return_tensors='pt', add_special_tokens=False)[0]
+                fact2 = tokenizer.encode(facts2[i], return_tensors='pt', add_special_tokens=False)[0]
+                if position1 == position2:
+                    position2 += len(fact1)
+                features['input_ids'][i, position1:position1 + len(fact1)] = fact1
+                features['input_ids'][i, position2:position2 + len(fact2)] = fact2
 
             q_len = questions.shape[1] - 1
             max_length = min(args.max_n_segments * input_seg_size, args.input_seq_len)

@@ -13,8 +13,8 @@ class RMTEncoderForSequenceClassification(RMTBaseModel):
 
         memory = self.set_memory(input_ids.shape)
         segmented = self.pad_and_segment(input_ids)
-        if self.num_mem_tokens == 0:
-            segmented = segmented[-1:]
+        # if self.num_mem_tokens == 0:
+        #     segmented = segmented[-1:]
 
         base_model_outputs = []
         for seg_num, segment_input_ids in enumerate(segmented):                

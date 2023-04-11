@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 import torch
 import numpy as np
 from torch.utils.data import DataLoader, DistributedSampler
-from datasets import Dataset, load_dataset
+import datasets
 from huggingface_hub import hf_hub_download
 from sklearn.metrics import f1_score, accuracy_score
 
@@ -49,8 +49,8 @@ torch.set_num_threads(4)
 torch.cuda.set_device(hvd.local_rank())
 
 parser = HfArgumentParser(TrainerArgs)
-# parser.add_argument('--task_name', type=str, help='Scrolls task name: "gov_report", "summ_screen_fd", "qmsum", '
-#                                                   '"narrative_qa", "qasper", "quality", "contract_nli"')
+parser.add_argument('--task_name', type=str, help='Scrolls task name: "gov_report", "summ_screen_fd", "qmsum", '
+                                                  '"narrative_qa", "qasper", "quality", "contract_nli"')
 parser.add_argument('--validate_only', action='store_true', default=False,
                     help='Skip training and run only validation. (default: False)')
 parser.add_argument('--working_dir', type=str, default='.',
@@ -94,9 +94,10 @@ parser.add_argument('--reconstruction_loss_coef', type=float, default=None,
                     help='reconstuction loss ratio in total loss')
 # parser.add_argument('--segment_ordering', type=str,help='????', default='regular',
 #                     choices=['regular', 'reversed', 'bidirectional', 'repeat_first', 'last_memory_only'])
-parser.add_argument('--num_valid_samples', type=int, default=None, help="number of samples for validation")
-parser.add_argument('--fact_segment', type=int, default=0, help="number of segment containing the fact")
-parser.add_argument('--random_position', action='store_true', help='choose fact seg num randomly', default=False)
+parser.add_argument('--separate_memory_classifier', action='store_true', help='separate weights of memory classifier', default=False)
+parser.add_argument('--memory_aggregation', type=str, help='how to aggregate memories out (avg or poop)', default='avg')
+parser.add_argument('--memory_task_loss_coef', type=float, default=None,
+                    help='memory tast loss ratio in total loss')
 
 
 # tokenizer
@@ -114,51 +115,51 @@ parser.add_argument('--warmup_init', action='store_true', default=False,
                     help='Adafactor warmup_init (default: False)')
 
 
+def download_metric():
+    scrolls_metric_path = hf_hub_download(repo_id="datasets/tau/scrolls", filename="metrics/scrolls.py")
+    updated_scrolls_metric_path = (
+        os.path.dirname(scrolls_metric_path) + os.path.basename(scrolls_metric_path).replace(".", "_") + ".py"
+    )
+    shutil.copy(scrolls_metric_path, updated_scrolls_metric_path)
+    return updated_scrolls_metric_path
 
-names = ['Mary', 'John', 'Daniel', 'Sandra']
-actions = ['moved', 'went', 'went back', 'journeyed', 'travelled']
-places = ['bathroom', 'hallway', 'garden', 'office', 'bedroom', 'kitchen']
-choices_dict = {'names': names, 'actions': actions, 'places': places}
 
-class MemoryDataset(Dataset):
-    def __init__(self, choices_dict=choices_dict, num_facts=1, split='train', dataset='quality', num_samples=None):
-        self.choices_dict = choices_dict
-        self.dataset = load_dataset('tau/scrolls', dataset)[split]
-        self.num_facts = num_facts
-        self.num_samples = num_samples
+scrolls_metric_path = download_metric()
 
-    def __getitem__(self, ind):
-        if self.num_samples:
-            ind = np.random.randint(len(self.dataset))
-        sample = self.dataset[ind]
-        sample['fact'], sample['question'], sample['answer'] = self.generate_qa() 
-        return sample
-    
-    def __len__(self):
-        return len(self.dataset) if self.num_samples is None else self.num_samples
+task_to_metric = {
+    'gov_report': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
+    'summ_screen_fd': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
+    'qmsum': ['rouge/rouge1', 'rouge/rouge2', 'rouge/rougeL', 'rouge/rougeLsum', 'rouge/geometric_mean'],
+    'narrative_qa': ['f1'],
+    'qasper': ['f1'],
+    'quality': ['exact_match'],
+    'contract_nli': ['exact_match']
+}
 
-    def generate_qa(self):
-        names, actions, places = self.choices_dict['names'], self.choices_dict['actions'], self.choices_dict['places']
+tasks_with_duplicates = {'narrative_qa', 'qasper'}
 
-        np.random.shuffle(names)
-        facts, questions, answers = [], [], []
-        for fact_num, name in zip(range(self.num_facts), names):
-            action, place = np.random.choice(actions), np.random.choice(places)
 
-            facts.append(f'{name} {action} to the {place}')
-            questions.append(f'Where is {name}?')
-            answers.append(place)
-
-        facts = ', '.join(facts) + '.'
-        questions = ' '.join(questions)
-        answers = ', '.join(answers)
-        
-        return facts, questions, answers
+# https://github.com/tau-nlp/scrolls/blob/5bfb8dbaf3a0128ac8c65922096fd95a645f6ba2/baselines/src/utils/duplicates.py#L1
+# some tasks have multiple possible labels for single input, drop_duplicates_in_input will collect such labels
+def drop_duplicates_in_input(untokenized_dataset):
+    indices_to_keep = []
+    id_to_idx = {}
+    outputs = []
+    for i, (id_, output) in enumerate(zip(untokenized_dataset["id"], untokenized_dataset["output"])):
+        if id_ in id_to_idx:
+            outputs[id_to_idx[id_]].append(output)
+            continue
+        indices_to_keep.append(i)
+        id_to_idx[id_] = len(outputs)
+        outputs.append([output])
+    untokenized_dataset = untokenized_dataset.select(indices_to_keep).flatten_indices()
+    untokenized_dataset = untokenized_dataset.remove_columns("output")
+    untokenized_dataset = untokenized_dataset.add_column("outputs", outputs)
+    return untokenized_dataset
 
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    # print('\n\n\n\n\n\n\nBs', args.batch_size)
     # set current working dir
     args.working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(args.working_dir)
@@ -183,106 +184,71 @@ if __name__ == '__main__':
     else:
         tokenizer = AutoTokenizer.from_pretrained(args.from_pretrained)
 
-
-    # get datasets
-    if hvd.rank() == 0:
-        logger.info(f'preparing dataset for babilong')
-    
-    train_dataset = MemoryDataset(choices_dict, num_facts=1, split='train', dataset='quality')
-    valid_dataset = MemoryDataset(choices_dict, num_facts=1, split='validation', dataset='quality', num_samples=args.num_valid_samples)
-    
-    answers = train_dataset.choices_dict['places']
-    labels_map = dict(zip(answers, range(len(answers))))
-    num_labels = len(labels_map)
-    if args.num_mem_tokens is None:
-        input_seg_size = args.input_size
-    else:
-        input_seg_size = args.input_size - args.num_mem_tokens - tokenizer.num_special_tokens_to_add()
-        if 'sep_token' in tokenizer.special_tokens_map:
-            input_seg_size -= 1
-
     if args.model_type == 'encoder-decoder':
-        raise NotImplementedError
-        # global_attention_first_token = False  # should be True for LED
-        # encode_plus_kwargs = {'truncation': True, 'padding': 'longest', 'pad_to_multiple_of': 1}
-        # # generate_kwargs = {'max_length': args.target_seq_len, 'min_length': args.target_seq_len}
-        # generate_kwargs = {}
+        global_attention_first_token = False  # should be True for LED
+        encode_plus_kwargs = {'truncation': True, 'padding': 'longest', 'pad_to_multiple_of': 1}
+        # generate_kwargs = {'max_length': args.target_seq_len, 'min_length': args.target_seq_len}
+        generate_kwargs = {}
 
-        # def collate_fn(batch):
-        #     # cut too long strings because they may slow down tokenization
-        #     # inputs = [b['fact'] + b['input'][:args.input_seq_len * 10] for b in batch]
-        #     inputs = [' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
-        #     questions = [b['question'] for b in batch]
-        #     labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
-        #     if args.input_prefix:
-        #         inputs = [args.input_prefix + inp for inp in inputs]
+        def collate_fn(batch):
+            # cut too long strings because they may slow down tokenization
+            inputs = [b['input'][:args.input_seq_len * 10] for b in batch]
+            if 'outputs' in batch[0]:
+                # if we have more than 1 label per example (only in valid) take only one of them
+                # to compute loss on valid
+                labels = [b['outputs'][0][:args.target_seq_len * 10] for b in batch]
+            else:
+                labels = [b['output'][:args.target_seq_len * 10] for b in batch]
+            if args.input_prefix:
+                inputs = [args.input_prefix + inp for inp in inputs]
+            features = tokenizer.batch_encode_plus(list(inputs), max_length=args.input_seq_len, return_tensors='pt',
+                                                   **encode_plus_kwargs)
+            with tokenizer.as_target_tokenizer():
+                labels = tokenizer.batch_encode_plus(list(labels), max_length=args.target_seq_len, return_tensors='pt',
+                                                     **encode_plus_kwargs).input_ids
+            labels[labels == tokenizer.pad_token_id] = -100
+            features['labels'] = labels
+            features['id'] = [b['id'] for b in batch]
+            if 'outputs' in batch[0]:
+                features['target_text'] = [b['outputs'] for b in batch]
+            else:
+                features['target_text'] = [b['output'] for b in batch]
+            if 'global_attention_mask' in features:
+                raise RuntimeError('What global attention mask for Longformer and LongformerEncoder-Decoder should be?')
+            return features
 
-        #     max_length = min(args.max_n_segments * input_seg_size, args.input_seq_len)
-        #     features = tokenizer.batch_encode_plus(list(inputs), return_tensors='pt', **encode_plus_kwargs, max_length=max_length)
-        #     questions = tokenizer.batch_encode_plus(list(questions), return_tensors='pt', **encode_plus_kwargs)['input_ids']
-
-        #     with tokenizer.as_target_tokenizer():
-        #         labels = tokenizer.batch_encode_plus(list(labels), max_length=args.target_seq_len, return_tensors='pt',
-        #                                                 **encode_plus_kwargs).input_ids
-        #     labels[labels == tokenizer.pad_token_id] = -100
-        #     features['labels'] = labels
-        #     features['id'] = [b['id'] for b in batch]
-        #     features['target_text'] = [b['answer'] for b in batch]
-        #     if 'global_attention_mask' in features:
-        #         raise RuntimeError('What global attention mask for Longformer and LongformerEncoder-Decoder should be?')
-        #     return features
-
-    elif args.model_type == 'encoder':
+    elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
         if args.use_generate_on_valid:
             raise RuntimeError('use_generate_on_valid should be set to False for encoder-only models')
 
-        encode_plus_kwargs = {
-                            #   'max_length': args.input_seq_len,
+        encode_plus_kwargs = {'max_length': args.input_seq_len,
                               'truncation': True,
                               'padding': 'longest',
                               'pad_to_multiple_of': 1}
         generate_kwargs = {}
+        labels_map = {'Contradiction': 0, 'Entailment': 1, 'Not mentioned': 2}
+        num_labels = len(labels_map)
 
-        fact_segment = 0
-        random_position = False
-        if hasattr(args, 'fact_segment'):
-            fact_segment = args.fact_segment
-        if hasattr(args, 'random_position'):
-            random_position = args.random_position
-        
-        def collate_fn(batch, input_seg_size=input_seg_size, fact_segment=fact_segment, random_position=random_position):
-            facts = [b['fact'] for b in batch]
-            inputs = [' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
-            questions = [b['question'] for b in batch]
-            labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
+        def collate_fn(batch):
+            # cut too long strings because they may slow down tokenization
+            inputs = [b['input'][:args.input_seq_len * 10] for b in batch]
+            labels = [b['output'][:args.target_seq_len * 10] for b in batch]
             if args.input_prefix:
                 inputs = [args.input_prefix + inp for inp in inputs]
-
-            total_input_size = args.max_n_segments * input_seg_size
-            features = tokenizer.batch_encode_plus(list(inputs), return_tensors='pt', **encode_plus_kwargs, max_length=total_input_size)
-            questions = tokenizer.batch_encode_plus(list(questions), return_tensors='pt', **encode_plus_kwargs)['input_ids']
-
-            if random_position:
-                fact_start_positions = np.random.randint(0, args.max_n_segments, len(batch)) * input_seg_size + 1
-            else:
-                fact_start_positions = np.ones(len(batch), dtype=int) * fact_segment * input_seg_size + 1
-
-            for i, position in enumerate(fact_start_positions):
-                fact = tokenizer.encode(facts[i], return_tensors='pt', add_special_tokens=False)[0]
-                features['input_ids'][i, position:position + len(fact)] = fact
-
-            q_len = questions.shape[1] - 1
-            max_length = min(args.max_n_segments * input_seg_size, args.input_seq_len)
-            features['input_ids'] = torch.cat([features['input_ids'][:, :max_length - q_len], questions[:, 1:]], dim=1)
-            
+            features = tokenizer.batch_encode_plus(list(inputs), return_tensors='pt', **encode_plus_kwargs)
             labels = np.array([labels_map[t] for t in labels])
             features['labels'] = torch.from_numpy(labels)
             return features
 
     else:
-        raise NotImplementedError('only encoder and encoder-decoder models are supported')
+        raise NotImplementedError('only encoder-decoder models are supported for scrolls datasets or '
+                                  'encoder models only for contract_nli task')
 
-    
+    # get train dataset
+    if hvd.rank() == 0:
+        logger.info(f'preparing dataset for: {args.task_name}')
+    dataset = datasets.load_dataset('tau/scrolls', args.task_name)
+    train_dataset = dataset['train']
     # shuffle train data each epoch (one loop over train_dataset)
     train_sampler = DistributedSampler(train_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=True,
                                        drop_last=False, seed=args.seed)
@@ -294,9 +260,10 @@ if __name__ == '__main__':
     # get validation dataset
     valid_dataloader = None
     if hvd.rank() == 0:
-        logger.info(f'preparing validation data from babilong')
-    # if args.task_name in tasks_with_duplicates:
-    #     valid_dataset = drop_duplicates_in_input(valid_dataset)
+        logger.info(f'preparing validation data from: {args.task_name}')
+    valid_dataset = dataset['validation']
+    if args.task_name in tasks_with_duplicates:
+        valid_dataset = drop_duplicates_in_input(valid_dataset)
     valid_sampler = DistributedSampler(valid_dataset, rank=hvd.rank(), num_replicas=hvd.size(), shuffle=False)
     valid_dataloader = DataLoader(valid_dataset, batch_size=per_worker_batch_size, sampler=valid_sampler,
                                   collate_fn=collate_fn, **kwargs)
@@ -309,7 +276,7 @@ if __name__ == '__main__':
         logger.info(f'Using model class: {model_cls}')
     if not args.from_pretrained:
         model_cfg = AutoConfig.from_pretrained(args.model_cfg)
-        if args.model_type == 'encoder':
+        if args.model_type == 'encoder' and args.task_name == 'contract_nli':
             model_cfg.num_labels = num_labels
         model = model_cls(config=model_cfg)
     else:
@@ -317,7 +284,7 @@ if __name__ == '__main__':
             logger.info(f'Loading pretrained model: {args.from_pretrained}')
         if args.model_type == 'encoder-decoder':
             model = model_cls.from_pretrained(args.from_pretrained)
-        elif args.model_type == 'encoder':
+        elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
             model = model_cls.from_pretrained(args.from_pretrained, num_labels=num_labels)
 
     # Aydar # Pass memory settings to pretrained model
@@ -343,16 +310,30 @@ if __name__ == '__main__':
             'memory_layers': args.memory_layers,
             'share_memory_layers': args.share_memory_layers,
             'reconstruction_loss_coef': args.reconstruction_loss_coef,
+            'separate_memory_classifier': args.separate_memory_classifier, 
+            'memory_aggregation': args.memory_aggregation, 
+            'memory_task_loss_coef': args.memory_task_loss_coef,
         }
         rmt_cls = get_cls_by_name(args.model_cls)
         if hvd.rank() == 0:
             logger.info(f'Wrapping in: {rmt_cls}')
         
-        model = rmt_cls(model, **rmt_config)
+        ## load cpt
         if args.model_cpt:
             model_cpt = os.path.join(args.model_cpt, "model_best.pth")
             cpt = torch.load(model_cpt, map_location='cpu')
-            model.load_state_dict(cpt['model_state_dict'])
+            # model.load_state_dict(cpt['model_state_dict'])
+            drop_keys = { "cls_token", "sep_token", "mem_token_ids", "embeddings.weight"}
+            fixed_state_dict = {}
+            for key, value in cpt['model_state_dict'].items():
+                if 'model' in key:
+                    key = key.split('model.')[1]
+                if key not in drop_keys:
+                    fixed_state_dict[key] = value
+            if hvd.rank() == 0:
+                logger.info(f'Loaded state dict from: {args.model_cpt}')
+        
+        model = rmt_cls(model, **rmt_config)
     
     # define optimizer
     optimizer_cls = get_optimizer(args.optimizer)
@@ -402,7 +383,7 @@ if __name__ == '__main__':
     #   - implemented currently
     # - compute metrics on batch lvl
     # - add support of HF metrics and turn off aggregation in case if metric has .add_batch method
-    # scrolls_metric = datasets.load_metric(scrolls_metric_path, args.task_name, keep_in_memory=True)
+    scrolls_metric = datasets.load_metric(scrolls_metric_path, args.task_name, keep_in_memory=True)
 
     def metrics_fn(data):
         # compute metrics based on stored labels, predictions, ...
@@ -424,13 +405,12 @@ if __name__ == '__main__':
 
         if y is not None and p is not None:
             if args.model_type == 'encoder-decoder':
-                metrics['exact_match'] = np.mean([pred == label for pred, label in zip(y, p)]) * 100
-                # if not isinstance(y[0], list):
-                #     y = [[_y] for _y in y]
-                # result = scrolls_metric.compute(predictions=p, references=y)
-                # for metric_name in task_to_metric[args.task_name]:
-                    # metrics[metric_name] = result[metric_name]
-            elif args.model_type == 'encoder':
+                if not isinstance(y[0], list):
+                    y = [[_y] for _y in y]
+                result = scrolls_metric.compute(predictions=p, references=y)
+                for metric_name in task_to_metric[args.task_name]:
+                    metrics[metric_name] = result[metric_name]
+            elif args.model_type == 'encoder' and args.task_name == 'contract_nli':
                 metrics['exact_match'] = accuracy_score(y, p) * 100
                 metrics['f1_micro'] = f1_score(y, p, average='micro')
         return metrics
@@ -460,10 +440,10 @@ if __name__ == '__main__':
             trainer.validate(valid_dataloader, write_tb=False)
     else:
         # run validation, do not write to tensorboard
-        # if hvd.rank() == 0:
-        #     logger.info('Running validation on train set:')
-        # trainer.validate(train_dataloader, split='train', write_tb=True)
+        if hvd.rank() == 0:
+            logger.info('Running validation on train set:')
+        trainer.validate(train_dataloader, split='train', write_tb=False)
         if valid_dataloader is not None:
             if hvd.rank() == 0:
                 logger.info('Running validation on valid data:')
-            trainer.validate(valid_dataloader, write_tb=True)
+            trainer.validate(valid_dataloader, write_tb=False)

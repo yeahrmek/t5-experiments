@@ -202,35 +202,35 @@ if __name__ == '__main__':
             input_seg_size -= 1
 
     if args.model_type == 'encoder-decoder':
-        raise NotImplementedError
-        # global_attention_first_token = False  # should be True for LED
-        # encode_plus_kwargs = {'truncation': True, 'padding': 'longest', 'pad_to_multiple_of': 1}
-        # # generate_kwargs = {'max_length': args.target_seq_len, 'min_length': args.target_seq_len}
-        # generate_kwargs = {}
+        # raise NotImplementedError
+        global_attention_first_token = False  # should be True for LED
+        encode_plus_kwargs = {'truncation': True, 'padding': 'longest', 'pad_to_multiple_of': 1}
+        # generate_kwargs = {'max_length': args.target_seq_len, 'min_length': args.target_seq_len}
+        generate_kwargs = {}
 
-        # def collate_fn(batch):
-        #     # cut too long strings because they may slow down tokenization
-        #     # inputs = [b['fact'] + b['input'][:args.input_seq_len * 10] for b in batch]
-        #     inputs = [' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
-        #     questions = [b['question'] for b in batch]
-        #     labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
-        #     if args.input_prefix:
-        #         inputs = [args.input_prefix + inp for inp in inputs]
+        def collate_fn(batch):
+            # cut too long strings because they may slow down tokenization
+            # inputs = [b['fact'] + b['input'][:args.input_seq_len * 10] for b in batch]
+            inputs = [b['fact'] + ' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
+            questions = [b['question'] for b in batch]
+            labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
+            if args.input_prefix:
+                inputs = [args.input_prefix + inp for inp in inputs]
 
-        #     max_length = min(args.max_n_segments * input_seg_size, args.input_seq_len)
-        #     features = tokenizer.batch_encode_plus(list(inputs), return_tensors='pt', **encode_plus_kwargs, max_length=max_length)
-        #     questions = tokenizer.batch_encode_plus(list(questions), return_tensors='pt', **encode_plus_kwargs)['input_ids']
+            max_length = min(args.max_n_segments * input_seg_size, args.input_seq_len)
+            features = tokenizer.batch_encode_plus(list(inputs), return_tensors='pt', **encode_plus_kwargs, max_length=max_length)
+            questions = tokenizer.batch_encode_plus(list(questions), return_tensors='pt', **encode_plus_kwargs)['input_ids']
 
-        #     with tokenizer.as_target_tokenizer():
-        #         labels = tokenizer.batch_encode_plus(list(labels), max_length=args.target_seq_len, return_tensors='pt',
-        #                                                 **encode_plus_kwargs).input_ids
-        #     labels[labels == tokenizer.pad_token_id] = -100
-        #     features['labels'] = labels
-        #     features['id'] = [b['id'] for b in batch]
-        #     features['target_text'] = [b['answer'] for b in batch]
-        #     if 'global_attention_mask' in features:
-        #         raise RuntimeError('What global attention mask for Longformer and LongformerEncoder-Decoder should be?')
-        #     return features
+            with tokenizer.as_target_tokenizer():
+                labels = tokenizer.batch_encode_plus(list(labels), max_length=args.target_seq_len, return_tensors='pt',
+                                                        **encode_plus_kwargs).input_ids
+            labels[labels == tokenizer.pad_token_id] = -100
+            features['labels'] = labels
+            features['id'] = [b['id'] for b in batch]
+            features['target_text'] = [b['answer'] for b in batch]
+            if 'global_attention_mask' in features:
+                raise RuntimeError('What global attention mask for Longformer and LongformerEncoder-Decoder should be?')
+            return features
 
     elif args.model_type == 'encoder':
         if args.use_generate_on_valid:
@@ -252,7 +252,7 @@ if __name__ == '__main__':
         
         def collate_fn(batch, input_seg_size=input_seg_size, fact_segment=fact_segment, random_position=random_position):
             facts = [b['fact'] for b in batch]
-            inputs = [' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
+            inputs = [b['fact'] + ' '.join([b['input']]) * int(np.ceil(args.input_seq_len * 10 / len(b['input']))) for b in batch]
             questions = [b['question'] for b in batch]
             labels = [b['answer'][:args.target_seq_len * 10] for b in batch]
             if args.input_prefix:
@@ -384,11 +384,17 @@ if __name__ == '__main__':
         if args.model_type == 'encoder':
             
             ##### booydar
-            data['labels'] = batch['labels']
-            for key in batch.keys():
-                if 'loss' in key: 
-                    data[key] = batch[key]
-            data['predictions'] = torch.argmax(output['logits'].detach(), dim=-1)
+            # data['labels'] = batch['labels']
+            # for key in batch.keys():
+            #     if 'loss' in key: 
+            #         data[key] = batch[key]
+            # data['predictions'] = torch.argmax(output['logits'].detach(), dim=-1)
+            predictions = torch.argmax(output['logits'].detach(), dim=-1)
+            eq_mask = predictions == batch['labels']
+            
+            data['num_correct'] = eq_mask.sum().item()
+            data['num_total'] = eq_mask.shape[0]
+            
         return data
 
     # HF datasets can compute metrics on each gpu process and then aggregate them on process with rank 0
@@ -420,7 +426,8 @@ if __name__ == '__main__':
                     logger.info('-' * 50)
             # todo: do we need to better clean P to remove tokens after eos? not remove special tokens only
         elif args.model_type == 'encoder':
-            y, p = data['labels'], data['predictions']
+            # y, p = data['labels'], data['predictions']
+            pass
 
         if y is not None and p is not None:
             if args.model_type == 'encoder-decoder':
@@ -431,8 +438,9 @@ if __name__ == '__main__':
                 # for metric_name in task_to_metric[args.task_name]:
                     # metrics[metric_name] = result[metric_name]
             elif args.model_type == 'encoder':
-                metrics['exact_match'] = accuracy_score(y, p) * 100
-                metrics['f1_micro'] = f1_score(y, p, average='micro')
+                # metrics['exact_match'] = accuracy_score(y, p) * 100
+                # metrics['f1_micro'] = f1_score(y, p, average='micro')
+                metrics['exact_match'] = data['num_correct'] / data['num_total'] * 100
         return metrics
 
     ### booydar

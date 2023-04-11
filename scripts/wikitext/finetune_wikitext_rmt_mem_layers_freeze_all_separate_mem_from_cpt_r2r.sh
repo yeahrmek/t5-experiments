@@ -7,7 +7,7 @@ CUBLAS_WORKSPACE_CONFIG=:4096:2
 CUDA_LAUNCH_BLOCKING=1
 
 MODEL_TYPE=decoder
-MODEL_CLS=modeling_rmt.language_modeling:RMTDecoderLMHead
+MODEL_CLS=modeling_rmt.language_modeling:RMTDecoderMemoryLayers
 BACKBONE_CLS=transformers:AutoModelForCausalLM
 TASK_NAME=wikitext-2-v1
 
@@ -40,7 +40,7 @@ do
 for SCHEDULER in constant_with_warmup
 do
 
-for LR in 5e-06
+for LR in 1e-05 1e-04
 do
 
 for K2 in 1
@@ -50,18 +50,21 @@ echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MODEL_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
 horovodrun --gloo -np $NP python run_finetuning_lm_rmt.py \
         --task_name $TASK_NAME \
-        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}rw_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_separate_mem_freeze_from_cpt/run_$N \
+        --model_path ../runs/test/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-${MAX_N_SEGMENTS}x${INPUT_SIZE}_mem${MEMORY_SIZE}rw_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_bptt-${K2}_mem_layers_r2r_shared_freeze_all_separate_mem/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
-        --backbone_cpt ../runs/test/wikitext-2-v1/gpt2/lr1e-05_linear_adamw_wd1e-03_1024-1024-1x1024_memNA_bs32_iters5000_constant_with_warmup/run_2 \
         --backbone_cls $BACKBONE_CLS \
+        --backbone_cpt ../runs/test/wikitext-2-v1/gpt2/lr1e-05_linear_adamw_wd1e-03_1024-1024-1x1024_memNA_bs32_iters20000_regular/run_1 \
         --input_seq_len $INPUT_SEQ_LEN \
         --input_size $INPUT_SIZE \
         --target_seq_len $TGT_LEN \
         --num_mem_tokens $MEMORY_SIZE \
         --batch_size $BS --gradient_accumulation_steps $(($TBS/($BS*$NP))) \
         --iters $ITERS \
+        --memory_layers 'all' \
+        --share_memory_layers \
+        --memory_forward_func rmt_utils.decoder.memory_layers:memory_layers_forward_r2r \
         --use_truncated_backward \
         --freeze_model_weights \
         --k1 -1 --k2 $K2 \
