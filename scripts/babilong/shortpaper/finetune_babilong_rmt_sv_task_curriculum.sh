@@ -17,12 +17,12 @@ TBS=32
 TGT_LEN=512
 MODEL_INPUT_SIZE=512
 
-INPUT_SEQ_LENS=(3992 4491 4900)
-MAX_N_SEGMENTSS=(8 9 10 )
-MEMORY_SIZES=(10 10 10)
-BSS=(4 2 2)
+INPUT_SEQ_LENS=(998 1497 1996 2495 2994 3493 3992 4491 4990)
+MAX_N_SEGMENTSS=(2 3 4 5 6 7 8 9 10)
+MEMORY_SIZES=(10 10 10 10 10 10 10 10)
+BSS=(4 2 2 1 1 1 1 1 1)
 
-for N in 2
+for N in 1
 do
 
 for MODEL_NAME in bert-base-cased 
@@ -52,7 +52,7 @@ horovodrun --gloo -np $NP python run_finetuning_babilong_rmt.py \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
-        --model_cpt ../runs/curriculum_task/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_$((INPUT_SEQ_LEN-499))-${TGT_LEN}-{$((MAX_N_SEGMENTS-1))}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_from_cpt_$((MAX_N_SEGMENTS-2))-$((MAX_N_SEGMENTS-1))/run_2 \
+        --model_cpt ../runs/curriculum_task/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_$((INPUT_SEQ_LEN-499))-${TGT_LEN}-{$((MAX_N_SEGMENTS-1))}seg_mem${MEMORY_SIZE}_bs${TBS}_iters${ITERS}_${SEGMENT_ORDERING}_from_cpt_$((MAX_N_SEGMENTS-2))-$((MAX_N_SEGMENTS-1))/run_3 \
         --backbone_cls $BACKBONE_CLS \
         --input_seq_len $INPUT_SEQ_LEN \
         --input_size $MODEL_INPUT_SIZE \

@@ -12,8 +12,7 @@ TASK_NAME=babilong
 METRIC=exact_match
 
 ITERS=3000
-TBS=32
-BS=16
+TBS=128
 
 TGT_LEN=512
 
@@ -45,7 +44,7 @@ do
 
 MODEL_CLS=modeling_rmt:RMTEncoderForSequenceClassification
 
-for SOURCE_N_SEGMENTS in 1 2 3 4 5 6 7 8 9 10
+for SOURCE_N_SEGMENTS in 1 2 3 4 5 6 7 8
 do
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N

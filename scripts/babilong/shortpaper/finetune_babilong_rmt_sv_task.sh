@@ -22,7 +22,7 @@ MAX_N_SEGMENTSS=(1)
 MEMORY_SIZES=(10)
 BSS=(8)
 
-for N in 3
+for N in 1
 do
 
 for MODEL_NAME in bert-base-cased 

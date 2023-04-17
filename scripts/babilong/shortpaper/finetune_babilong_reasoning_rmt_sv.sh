@@ -22,7 +22,7 @@ INPUT_SEQ_LENS=(499)
 MAX_N_SEGMENTSS=(1)
 MEMORY_SIZES=(10)
 
-for N in 1 2
+for N in 1
 do
 
 for MODEL_NAME in bert-base-cased 

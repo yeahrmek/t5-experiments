@@ -44,17 +44,17 @@ do
 
 MODEL_CLS=modeling_rmt:RMTEncoderForSequenceClassification
 
-for SOURCE_N_SEGMENTS in 1 2 3 4 5 6 7 8 9 10
+for SOURCE_N_SEGMENTS in 1 2 3 4 5 6 7 8
 do
 
 echo RUNNING: TASK_NAME SRC_LEN MODEL_NAME MODEL_CLS N_SEG MEMORY_SIZE INPUT_SEQ_LEN LR N
 echo RUNNING: $TASK_NAME $SRC_LEN $MODEL_NAME $MODEL_CLS $MAX_N_SEGMENTS $MEMORY_SIZE $INPUT_SEQ_LEN $LR $N
-horovodrun --gloo -np $NP python run_finetuning_babilong_random_rmt.py \
-        --model_path ../runs/curriculum_task/${TASK_NAME}/$MODEL_NAME/lr${LR}_${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_${SEGMENT_ORDERING}_${SOURCE_N_SEGMENTS}-${MAX_N_SEGMENTS}seg_eval/run_$N \
+horovodrun --gloo -np $NP python run_finetuning_babilong_reasoning_rmt.py \
+        --model_path ../runs/curriculum_task/${TASK_NAME}/$MODEL_NAME/${SCHEDULER}_adamw_wd1e-03_${INPUT_SEQ_LEN}-${TGT_LEN}-{$MAX_N_SEGMENTS}seg_mem${MEMORY_SIZE}_bs${TBS}_${SEGMENT_ORDERING}_${SOURCE_N_SEGMENTS}-${MAX_N_SEGMENTS}seg_eval/run_$N \
         --from_pretrained $MODEL_NAME \
         --model_type $MODEL_TYPE \
         --model_cls $MODEL_CLS \
-        --model_cpt ../runs/curriculum_task/babilong_reasoning/bert-base-cased/lr1e-05_linear_adamw_wd1e-03_$((499*SOURCE_N_SEGMENTS))-512-{$SOURCE_N_SEGMENTS}seg_mem10_bs32_regular_from_cpt_$((SOURCE_N_SEGMENTS-1))-${SOURCE_N_SEGMENTS}/run_$N/ \
+        --model_cpt ../runs/curriculum_task/babilong_reasoning/bert-base-cased/linear_adamw_wd1e-03_$((499*SOURCE_N_SEGMENTS))-512-{$SOURCE_N_SEGMENTS}seg_mem10_bs32_regular_from_cpt_$((SOURCE_N_SEGMENTS-1))-${SOURCE_N_SEGMENTS}/run_$N/ \
         --backbone_cls $BACKBONE_CLS \
         --input_seq_len $INPUT_SEQ_LEN \
         --input_size $MODEL_INPUT_SIZE \
