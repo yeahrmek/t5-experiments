@@ -1,3 +1,5 @@
+This repository provides code for the [paper](https://github.com/booydar/t5-experiments/tree/scaling-report/Scaling Transformer to 1M tokens and beyond with RMT.pdf)
+
 # t5-experiments
 This repo is based on 🤗 Transfomers implementation of the T5 model and BERT.
 T5 data processing pipeline is used from the original [T5 repository](https://github.com/google-research/text-to-text-transfer-transformer) for pre-training (span corruption, prefix-lm) and fine-tuning. BERT data processing pipeline is used from [Megatron-LM](https://github.com/NVIDIA/Megatron-LM).
