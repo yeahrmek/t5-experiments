@@ -1,4 +1,4 @@
-This repository provides code for the [paper](https://github.com/booydar/t5-experiments/tree/scaling-report/Scaling Transformer to 1M tokens and beyond with RMT.pdf)
+This repository provides code for the [paper](https://github.com/booydar/t5-experiments/tree/scaling-report/Scaling_Transformer_to_1M_tokens_and_beyond_with_RMT.pdf)
 
 # t5-experiments
 This repo is based on 🤗 Transfomers implementation of the T5 model and BERT.
