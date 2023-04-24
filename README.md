@@ -1,6 +1,5 @@
 This repository provides code for the [paper](https://arxiv.org/abs/2304.11062):
 
-# Scaling Transformer to 1M tokens and beyond with RMT
 
 ![image](./img/paper_title_page.png)
 
