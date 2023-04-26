@@ -2,9 +2,9 @@ import random
 from typing import Callable, List, Optional
 
 import t5
-import torch
 import tensorflow.compat.v1 as tf
 import tensorflow_io as tfio
+import torch
 from t5.models.hf_model import tokens_to_batches
 from t5.seqio.dataset_providers import ShardInfo
 from torch.utils.data import IterableDataset
@@ -18,17 +18,19 @@ def sharded_dataset_fn(shards, split=None, shuffle_files=False):
 
 
 def text_preprocessor(ds):
-    return ds.map(lambda text: {'targets': text})
+    return ds.map(lambda text: {"targets": text})
 
 
 def jsonl_preprocessor(ds):
     """
     parse single line in jsonl file, extracts field `text`
     """
-    specs = {
-        "text": tf.TensorSpec(tf.TensorShape([]), tf.string)
-    }
-    return ds.map(lambda text: {'targets': tfio.experimental.serialization.decode_json(text, specs)['text']})
+    specs = {"text": tf.TensorSpec(tf.TensorShape([]), tf.string)}
+    return ds.map(
+        lambda text: {
+            "targets": tfio.experimental.serialization.decode_json(text, specs)["text"]
+        }
+    )
 
 
 DEFAULT_SPM_PATH = "./vocabs/sentencepiece.model"
@@ -41,24 +43,36 @@ def get_vocabulary(vocab_path=DEFAULT_SPM_PATH):
 
 def get_output_features(vocab_path=DEFAULT_SPM_PATH):
     return {
-            "inputs": t5.seqio.Feature(vocabulary=get_vocabulary(vocab_path), add_eos=True, required=False),
-            "targets": t5.seqio.Feature(vocabulary=get_vocabulary(vocab_path), add_eos=True)
-           }
-
-
-DEFAULT_OUTPUT_FEATURES = {
-        "inputs": t5.seqio.Feature(vocabulary=get_vocabulary(), add_eos=True, required=False),
-        "targets": t5.seqio.Feature(vocabulary=get_vocabulary(), add_eos=True)
+        "inputs": t5.seqio.Feature(
+            vocabulary=get_vocabulary(vocab_path), add_eos=True, required=False
+        ),
+        "targets": t5.seqio.Feature(
+            vocabulary=get_vocabulary(vocab_path), add_eos=True
+        ),
     }
 
 
+DEFAULT_OUTPUT_FEATURES = {
+    "inputs": t5.seqio.Feature(
+        vocabulary=get_vocabulary(), add_eos=True, required=False
+    ),
+    "targets": t5.seqio.Feature(vocabulary=get_vocabulary(), add_eos=True),
+}
+
+
 class T5PretrainingDataset(IterableDataset):
-    def __init__(self, shards: List[str], batch_size: int,
-                 task: str = 'span_corruption',
-                 text_preprocessor: Callable = text_preprocessor,
-                 inputs_len: int = 32, targets_len: int = 32,
-                 vocab_path: str = DEFAULT_SPM_PATH, shard_info: Optional[ShardInfo] = None,
-                 shuffle: bool = True):
+    def __init__(
+        self,
+        shards: List[str],
+        batch_size: int,
+        task: str = "span_corruption",
+        text_preprocessor: Callable = text_preprocessor,
+        inputs_len: int = 32,
+        targets_len: int = 32,
+        vocab_path: str = DEFAULT_SPM_PATH,
+        shard_info: Optional[ShardInfo] = None,
+        shuffle: bool = True,
+    ):
         """Torch IterableDataset wrapper for span_corruption task from t5.
            Uses tf.datasets under the hood.
 
@@ -84,26 +98,35 @@ class T5PretrainingDataset(IterableDataset):
         self.shards = shards
         self.batch_size = batch_size
         self.text_preprocessor = text_preprocessor
-        self.task = t5.data.Task(task,
-                                 splits=[],
-                                 dataset_fn=lambda split, shuffle_files: sharded_dataset_fn(self.shards, split,
-                                                                                            shuffle_files),
-                                 text_preprocessor=[self.text_preprocessor],
-                                 token_preprocessor=getattr(t5.data.preprocessors, task),
-                                 output_features=get_output_features(vocab_path),
-                                 metric_fns=[])
-        self.tfdataset = self.task.get_dataset(split='', sequence_length=self.sequence_length,
-                                               shuffle=shuffle, shard_info=shard_info)
-        self.tfdataset = tokens_to_batches(self.tfdataset,
-                                           sequence_length=self.sequence_length,
-                                           batch_size=self.batch_size,
-                                           output_features=get_output_features(vocab_path))
+        self.task = t5.data.Task(
+            task,
+            splits=[],
+            dataset_fn=lambda split, shuffle_files: sharded_dataset_fn(
+                self.shards, split, shuffle_files
+            ),
+            text_preprocessor=[self.text_preprocessor],
+            token_preprocessor=getattr(t5.data.preprocessors, task),
+            output_features=get_output_features(vocab_path),
+            metric_fns=[],
+        )
+        self.tfdataset = self.task.get_dataset(
+            split="",
+            sequence_length=self.sequence_length,
+            shuffle=shuffle,
+            shard_info=shard_info,
+        )
+        self.tfdataset = tokens_to_batches(
+            self.tfdataset,
+            sequence_length=self.sequence_length,
+            batch_size=self.batch_size,
+            output_features=get_output_features(vocab_path),
+        )
 
     def __iter__(self):
         # todo: make dataset infinite?
         for x in self.tfdataset:
-            if 'targets_mask' in x:  # do not compute loss on paddings
-                x['targets'] -= (1 - x['targets_mask']) * 100
+            if "targets_mask" in x:  # do not compute loss on paddings
+                x["targets"] -= (1 - x["targets_mask"]) * 100
             yield {k: torch.from_numpy(x[k]).type(torch.long) for k in x}
 
 

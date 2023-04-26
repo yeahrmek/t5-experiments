@@ -1,0 +1,10 @@
+python run_finetuning_lm_rmt_lean.py \
+  --task_name lean \
+  --input_seq_name 512 \
+  --tokenizer  ../mix2_tokenizer.ckpt \
+  --backbone_cls transformers:GPTNeoForCausalLM \
+  --backbone_cpt ../mix2_2zywvs69.ckpt \
+  --rmt_cls modeling_rmt:RMTDecoderForCausalLM \
+  --num_mem_tokens 10 \
+  --max_n_segments 1 \
+  --curriculum 1 1
