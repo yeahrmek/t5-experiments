@@ -11,9 +11,10 @@ from dotenv import load_dotenv
 from torch.utils.data import DistributedSampler
 from transformers import AutoTokenizer  # noqa: E402
 from transformers import HfArgumentParser
+from pytorch_lightning.loggers import WandbLogger
 
 import lm_experiments_tools.optimizers as optimizers  # noqa: E402
-from lean_dataset import RMTDocsDataLoader, RMTDocsDataset
+from lm_experiments_tools.lean_dataset import RMTDocsDataLoader, RMTDocsDataset
 from lm_experiments_tools import TrainerArgs
 from lm_experiments_tools.trainer_tbptt import Trainer
 from lm_experiments_tools.utils import collect_run_configuration, get_cls_by_name
@@ -50,6 +51,9 @@ torch.cuda.set_device(hvd.local_rank())
 def setup_parser():
     parser = HfArgumentParser(TrainerArgs)
     parser.add_argument("--task_name", type=str, help="Task name, wikitext, ...")
+    parser.add_argument("--data_dir", type=str, help="Path to the data directory")
+    parser.add_argument("--log_dir", type=str, help="Path to the log directory")
+    parser.add_argument("--wandb_project", type=str, help="Name of wandb project")
     parser.add_argument(
         "--validate_only",
         action="store_true",
@@ -68,19 +72,6 @@ def setup_parser():
         type=int,
         default=0,
         help="how many valid examples to show during training (default: 0)",
-    )
-    parser.add_argument(
-        "--input_seq_len",
-        type=int,
-        default=128,
-        help="input sequnce length, i.e. segment length (default: 128).",
-    )
-    parser.add_argument(
-        "--target_seq_len",
-        type=int,
-        default=16,
-        help="target sequnce length, should be set to "
-        "max(len(target))+1 for EOS (default: 16).",
     )
     parser.add_argument(
         "--data_n_workers",
@@ -137,10 +128,10 @@ def setup_parser():
         type=int,
         nargs="+",
         help="Scheduler for number of segments to train on. "
-        "Input should be in the following format: <n_epochs> <n_segments> <n_epochs> <n_segments> ..."
-        "Example: `--curriculum 1 1 1 2 2 5`. "
-        "In this example we will first train for 1 epoch on 1 segment "
-        "then train for 1 epoch on 2 segments, then for 2 epochs on 5 segments",
+        "Input should be in the following format: <n_iters> <n_segments> <n_iters> <n_segments> ..."
+        "Example: `--curriculum 1000 1 1000 2 2000 5`. "
+        "In this example we will first train for 1000 iters on 1 segment "
+        "then train for 1000 iters on 2 segments, then for 2000 iters on 5 segments",
     )
     parser.add_argument(
         "--sum_loss",
@@ -282,39 +273,63 @@ def setup_env_and_args(args):
 
     # Curriculum learning
     curriculum = {
-        "n_epochs": args.curriculum[::2],
+        "n_iters": args.curriculum[::2],
         "max_n_segments": args.curriculum[1::2],
     }
     args.curriculum = curriculum
 
 
 def get_tokenizer(args):
-    if not args.from_pretrained:
-        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(args.from_pretrained)
-
+    tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     return tokenizer
 
 
-def get_dataloaders(args, tokenizer):
+def get_logger(args):
+
+    Path(args.log_dir).mkdir(parents=True, exist_ok=True)
+
+    # get absolute path
+    wandb_logger = WandbLogger(
+        project=args.wandb_project,
+        save_dir=args.log_dir
+    )
+    wandb_logger.LOGGER_JOIN_CHAR = '/'
+    args.logger_version = wandb_logger.version
+    args.model_path = str(Path(args.log_dir) / wandb_logger.version / 'checkpoints')
+
+    if hvd.rank() == 0:
+        logger.info(f"Logger run_id: {wandb_logger.version}")
+        logger.info(f"Log_dir: {wandb_logger.save_dir}")
+        logger.info(f"Model checkpoint path: {args.model_path}")
+
+    return wandb_logger
+
+
+def get_datasets(args, tokenizer):
     # get datasets
+    segment_size = args.input_size - 2 * args.num_mem_tokens - tokenizer.num_special_tokens_to_add()
     if hvd.rank() == 0:
         logger.info(f"preparing dataset for {args.task_name}")
+        logger.info(f"segment_size = {segment_size}")
 
     datasets = {}
     for split in ["train", "val"]:
         datasets[split] = RMTDocsDataset(
-            Path(args.data_dir) / split, tokenizer, args.args.max_n_segments
+            Path(args.data_dir) / split, tokenizer, args.max_n_segments
         )
         datasets[split].tokenize()
-        datasets[split].split_to_segments(args.input_seq_len)
+        datasets[split].split_to_segments(segment_size)
 
+    return datasets
+
+
+def get_dataloaders(args, datasets):
     loader_kwargs = {
         "pin_memory": True,
         "num_workers": args.data_n_workers,
         "batch_size": args.batch_size
         * args.gradient_accumulation_steps,  # batch size per GPU
+        "drop_last": True
     }
 
     loaders, samplers = {}, {}
@@ -329,7 +344,7 @@ def get_dataloaders(args, tokenizer):
         seed=args.seed,
     )
     loaders["train"] = RMTDocsDataLoader(
-        datasets[split],
+        datasets["train"],
         sampler=samplers["train"],
         **loader_kwargs,
     )
@@ -364,7 +379,7 @@ def get_model(args, tokenizer):
         "reconstruction_loss_coef": args.reconstruction_loss_coef,
     }
 
-    if hvd.rank() == 0 and args.model_path is None:
+    if hvd.rank() == 0 and args.log_dir is None:
         logger.warning(
             "model_path is not set: config, logs and checkpoints will not be saved."
         )
@@ -439,7 +454,7 @@ def get_optimizer(args, model):
     return optimizer
 
 
-def train(trainer, loaders):
+def train(trainer):
     # train loop
     trainer.train()
     # make sure all workers are done
@@ -450,8 +465,6 @@ def train(trainer, loaders):
         if hvd.rank() == 0:
             logger.info(f"Loading best saved model from {best_model_path}")
         trainer.load(best_model_path)
-
-    validate(trainer, loaders, "val")
 
 
 def validate(trainer, loaders, split):
@@ -469,6 +482,7 @@ if __name__ == "__main__":
     setup_env_and_args(args)
 
     tokenizer = get_tokenizer(args)
+    wandb_logger = get_logger(args)
 
     model = get_model(args, tokenizer)
 
@@ -518,14 +532,26 @@ if __name__ == "__main__":
         key: y[key] for key in y.keys() if (("loss" in key) or ("!log" in key))
     }
 
-    for n_epochs, max_n_segments in zip(
-        args.curriculum["n_epochs"], args.curriculum["max_n_segments"]
+    datasets = get_datasets(args, tokenizer)
+    args.valid_interval = args.valid_interval // args.gradient_accumulation_steps
+    args.num_warmup_steps = args.num_warmup_steps // args.gradient_accumulation_steps
+
+    for n_iters, max_n_segments in zip(
+        args.curriculum["n_iters"], args.curriculum["max_n_segments"]
     ):
         args.max_n_segments = max_n_segments
-        args.max_n_epochs = n_epochs
+        model.rmt_config['max_n_segments'] = max_n_segments
 
-        # TODO: add prefix to logger with `max_n_segments`
-        loaders, samplers = get_dataloaders(args, tokenizer)
+        # multiply by max_n_segments because dataloader yields each segment
+        # so trainer will consider each segment as a separate iteration
+        args.iters = n_iters * max_n_segments // args.gradient_accumulation_steps
+
+        wandb_logger._prefix = f"seg_len-{max_n_segments}"
+        args.model_path = Path(args.model_path).parent / f"seg_len-{max_n_segments}" / "checkpoints"
+
+        for split, ds in datasets.items():
+            ds.set_max_n_segments(max_n_segments)
+        loaders, samplers = get_dataloaders(args, datasets)
 
         trainer = Trainer(
             args,
@@ -536,13 +562,13 @@ if __name__ == "__main__":
             samplers["train"],
             keep_for_metrics_fn=keep_for_metrics_fn,
             metrics_fn=metrics_fn,
-            ###booydar
             batch_metrics_fn=batch_metrics_fn,
             generate_kwargs={},
+            wandb_logger=wandb_logger
         )
 
         if not args.validate_only:
-            train(trainer, loaders)
+            model.reset_memory()
+            train(trainer)
         else:
-            validate(trainer, loaders, "train")
             validate(trainer, loaders, "val")

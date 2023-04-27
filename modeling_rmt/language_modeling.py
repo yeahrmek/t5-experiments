@@ -24,6 +24,10 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         self.model.embeddings = self.model.get_input_embeddings()
         self._forward_counter = 0
 
+    def reset_memory(self):
+        self.memory_states = None
+        self._forward_counter = 0
+
     def set_memory(self, input_shape):
         memory = self.model.embeddings(self.mem_token_ids)
         memory = memory.repeat(input_shape[0], 1, 1)
@@ -57,7 +61,7 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         if (
             not hasattr(self, "memory_states")
             or self.memory_states is None
-            or self._forward_counter == self.rmt_config.max_n_segments
+            or self._forward_counter == self.rmt_config['max_n_segments']
         ):
             init_memory = self.set_memory(input_ids.shape)
             self.memory_states = [(None, init_memory)]

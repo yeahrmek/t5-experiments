@@ -147,6 +147,7 @@ class Trainer:
                  keep_for_metrics_fn=None,
                  metrics_fn=None,
                  generate_kwargs={},
+                 wandb_logger=None,
                  ) -> None:
         """Implements training loop with horovod multi-gpu, apex fp16 & grad accumulation support.
 
@@ -180,6 +181,7 @@ class Trainer:
         self.keep_for_metrics_fn = keep_for_metrics_fn
         self.metrics_fn = metrics_fn
         self.generate_kwargs = generate_kwargs
+        self.wandb_logger = wandb_logger
 
         self.args = args
 
@@ -538,6 +540,11 @@ class Trainer:
                 train_loss = train_metrics['loss']
 
                 if hvd.rank() == 0:
+                    if self.wandb_logger:
+                        self.wandb_logger.log_metrics(
+                            {f'train/{key}': val for key, val in train_metrics.items()},
+                            step=self.n_iter
+                        )
                     # todo: move logging, move to self.log()
                     for k in train_metrics:
                         self._log_info(f'step: {self.n_iter}/{self.args.iters} {k}: {train_metrics[k]:.4f}')
@@ -551,6 +558,7 @@ class Trainer:
                         self.tb.add_scalar('time/samples/per_iter', iteration_time,
                                            self.n_iter * self.global_batch_size)
                     # log learning rate
+                    lr_dict = {}
                     for j, param_group in enumerate(self.optimizer.param_groups):
                         # adafactor uses external lr to compute its own lr if scale_parameter is true
                         # adafactor might not have external lr in case if relative_step is used
@@ -560,12 +568,26 @@ class Trainer:
                                 self.tb.add_scalar(f'{p}/samples/param_group_{j}', param_group[p],
                                                    self.n_iter * self.global_batch_size)
 
+                            if p in param_group and param_group[p] is not None:
+                                lr_dict[f'{p}/param_group_{j}'] = param_group[p]
+
+                    if self.wandb_logger:
+                        self.wandb_logger.log_metrics(
+                            {f'train/{key}': val for key, val in lr_dict.items()},
+                            step=self.n_iter
+                        )
+
             # validation
             if self.valid_dataloader is not None and self.n_iter % self.args.valid_interval == 0:
                 # todo: we can use other metrics than loss here
                 valid_metrics = self.validate(self.valid_dataloader)
                 valid_loss = valid_metrics['loss']
                 valid_metric = valid_metrics[self.args.optimize_metric]
+                if self.wandb_logger:
+                    self.wandb_logger.log_metrics(
+                        {f'val/{key}': val for key, val in valid_metrics.items()},
+                        step=self.n_iter,
+                    )
                 if self.metric_improved_fn(best_valid_metric, valid_metric):
                     best_valid_metric = valid_metric
                     self.early_stopping_counter = 0
