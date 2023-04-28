@@ -1,12 +1,11 @@
 import math
 import warnings
 from typing import List
+
 import torch
 from pytorch_lightning import LightningModule
-
-from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import _LRScheduler
-
+from torch.optim.optimizer import Optimizer
 
 ALL_LAYERNORM_LAYERS = [torch.nn.LayerNorm]
 
@@ -108,22 +107,18 @@ class RMTModelPL(LightningModule):
             {
                 "loss": out['loss'],
                 "perplexity": torch.exp(out["loss"].detach())
-            }
+            },
+            batch_size=batch['input_ids'].shape[0]
         )
-        return {"loss": out['loss'], "batch_idx": batch_idx}
 
     def validation_step(self, batch, batch_idx):
         out = self(batch)
-        return dict(loss=out['loss'])
-
-    def validation_epoch_end(self, outputs):
-        loss = torch.Tensor([out["loss"] for out in outputs]).mean()
-
         metrics = {
-            "loss": loss,
-            "perplexity": torch.exp(loss).item()
+            "loss": out["loss"],
+            "perplexity": torch.exp(out["loss"])
         }
-        self._log("val", metrics, on_step=False, sync_dist=True, rank_zero_only=True)
+        self._log("val", metrics, on_step=False, on_epoch=True, batch_size=batch['input_ids'].shape[0])
+
 
     def configure_optimizers(self):
 

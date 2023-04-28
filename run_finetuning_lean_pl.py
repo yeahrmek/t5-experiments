@@ -45,6 +45,7 @@ def setup_parser():
     parser.add_argument("--task_name", type=str, help="Task name, wikitext, ...")
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
+    parser.add_argument("--resume_training", type=bool, default=False)
     parser.add_argument(
         "--validate_only",
         action="store_true",
@@ -92,7 +93,7 @@ def setup_parser():
         help="RMT model class name to use (default: transformers:BertForPreTraining)",
     )
     parser.add_argument(
-        "--rmt_cpt", type=str, default=None, help="pretrained model checkpoint path"
+        "--pretrained_ckpt", type=str, default=None, help="pretrained model checkpoint path"
     )
     parser.add_argument(
         "--backbone_cls",
@@ -125,10 +126,10 @@ def setup_parser():
         type=int,
         nargs="+",
         help="Scheduler for number of segments to train on. "
-        "Input should be in the following format: <n_iters> <n_segments> <n_iters> <n_segments> ..."
-        "Example: `--curriculum 1000 1 1000 2 2000 5`. "
-        "In this example we will first train for 1000 iters on 1 segment "
-        "then train for 1000 iters on 2 segments, then for 2000 iters on 5 segments",
+        "Input should be in the following format: <n_epochs> <n_segments> <n_epochs> <n_segments> ..."
+        "Example: `--curriculum 1 1 1 2 1 5`. "
+        "In this example we will first train for 1 epoch on 1 segment "
+        "then train for 1 epoch on 2 segments, then for 2 epochs on 5 segments",
     )
     parser.add_argument(
         "--sum_loss",
@@ -298,7 +299,7 @@ def setup_env_and_args(cfg):
 
     # Curriculum learning
     curriculum = {
-        "n_iters": cfg.curriculum[::2],
+        "n_epochs": cfg.curriculum[::2],
         "max_n_segments": cfg.curriculum[1::2],
     }
     cfg.curriculum = curriculum
@@ -408,22 +409,18 @@ def get_model(cfg, tokenizer):
 
     rmt_model = rmt_cls(backbone, **rmt_config)
 
-    ## load cpt of rmt
-    if cfg.rmt_cpt:
-        rmt_cpt = os.path.join(cfg.rmt_cpt, "model_best.pth")
-        state_dict = torch.load(rmt_cpt, map_location="cpu")
-        rmt_model.load_state_dict(state_dict["model_state_dict"])
-        if os.environ.get('LOCAL_RANK', 0) == 0:
-            logger.info(f"Loaded RMT state dict from: {cfg.rmt_cpt}")
+    if cfg.pretrained_ckpt:
+        logger.info(f'Loading checkpoint: {cfg.pretrained_ckpt}')
+        pl_model = RMTModelPL.load_from_checkpoint(cfg.pretrained_ckpt, rmt_model=rmt_model)
+    else:
+        pl_model = RMTModelPL(rmt_model, cfg)
 
     if cfg.freeze_model_weights:
-        for n, p in rmt_model.named_parameters():
+        for n, p in pl_model.named_parameters():
             if "memory" not in n and "wte" not in n:
                 p.requires_grad = False
         if os.environ.get('LOCAL_RANK', 0) == 0:
             logger.info(f"Frozen moodel weights except embeddings")
-
-    pl_model = RMTModelPL(rmt_model, cfg)
 
     return pl_model
 
@@ -465,31 +462,62 @@ if __name__ == "__main__":
 
     datasets = get_datasets(cfg, tokenizer)
 
-    for n_iters, max_n_segments in zip(
-        cfg.curriculum["n_iters"], cfg.curriculum["max_n_segments"]
+    # find resume ckpt path
+    max_n_segments_ckpt = 0
+    resume_ckpt_path = None
+    if cfg.resume_training:
+        ckpt_dir = (
+            Path(wandb_logger.save_dir) /
+            wandb_logger._project /
+            wandb_logger.version /
+            "checkpoints"
+        )
+        resume_ckpt_path = str(ckpt_dir / 'last.ckpt')
+
+        for path in ckpt_dir.glob('*.ckpt'):
+            if 'n_segments=' in path.name:
+                n_segments = path.name.split('n_segments=')[1]
+                n_segments = int(n_segments.split('-epoch')[0])
+                max_n_segments_ckpt = max(max_n_segments_ckpt, n_segments)
+
+        logger.info(f"Resuming from: {resume_ckpt_path}")
+        logger.info(f"Resuming n_segments: {max_n_segments_ckpt}")
+
+    for n_epochs, max_n_segments in zip(
+        cfg.curriculum["n_epochs"], cfg.curriculum["max_n_segments"]
     ):
-        cfg.max_n_segments = max_n_segments
-        model._module.rmt_config['max_n_segments'] = max_n_segments
-
-        # multiply by max_n_segments because dataloader yields each segment
-        # so trainer will consider each segment as a separate iteration
-        cfg.trainer.max_steps = n_iters * max_n_segments
-        model.cfg.lr_scheduler.T_max = cfg.trainer.max_steps // cfg.trainer.accumulate_grad_batches
-
-        wandb_logger._prefix = f"seg_len-{max_n_segments}"
+        if max_n_segments < max_n_segments_ckpt:
+            continue
 
         for split, ds in datasets.items():
             ds.set_max_n_segments(max_n_segments)
         loaders = get_dataloaders(cfg, datasets)
+
+
+        cfg.max_n_segments = max_n_segments
+        cfg.trainer.max_epochs = n_epochs
+        model.cfg.lr_scheduler.T_max = len(loaders['train']) // cfg.trainer.accumulate_grad_batches
+        model._module.set_max_n_segments(max_n_segments)
+        wandb_logger._prefix = f"seg_len-{max_n_segments}"
 
         trainer_options = cfg.trainer.as_dict()
         trainer_options['logger'] = wandb_logger
         trainer_options['callbacks'] = get_trainer_callbacks(max_n_segments)
         trainer = Trainer(**trainer_options)
 
+        logger.info('-' * 80)
+        logger.info(f'Max number of segments: {max_n_segments}')
+        logger.info(f'N batches per epoch: {len(loaders["train"])}')
+        logger.info(f'Trainer max epochs: {trainer.max_epochs}')
+
         model._module.reset_memory()
 
         if cfg.validate_only:
             trainer.validate(model, loaders["val"])
         else:
-            trainer.fit(model, train_dataloaders=loaders['train'], val_dataloaders=loaders['val'])
+            trainer.fit(
+                model,
+                train_dataloaders=loaders['train'],
+                val_dataloaders=loaders['val'],
+                ckpt_path=resume_ckpt_path
+            )
