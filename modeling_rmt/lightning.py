@@ -72,6 +72,60 @@ class LinearWarmupCosineAnnealingLR(_LRScheduler):
                 for group in self.optimizer.param_groups]
 
 
+class LinearWarmupLinearLR(_LRScheduler):
+    """
+    Cosine annealing lr with linear warmup
+    """
+    def __init__(
+        self,
+        optimizer: Optimizer,
+        warmup_epochs: int,
+        T_max: int,
+        warmup_start_lr: float = 0.0,
+        eta_min: float = 0.0,
+        last_epoch: int = -1,
+    ) -> None:
+        """
+        Args:
+            optimizer (Optimizer): Wrapped optimizer.
+            warmup_epochs (int): Maximum number of iterations for linear warmup
+            T_max (int): Maximum number of iterations
+            warmup_start_lr (float): Learning rate to start the linear warmup. Default: 0.
+            eta_min (float): Minimum learning rate. Default: 0.
+            last_epoch (int): The index of last epoch. Default: -1.
+        """
+        self.warmup_epochs = warmup_epochs
+        self.T_max = T_max
+        self.warmup_start_lr = warmup_start_lr
+        self.eta_min = eta_min
+
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self) -> List[float]:
+        if not self._get_lr_called_within_step:
+            warnings.warn("To get the last learning rate computed by the scheduler, "
+                          "please use `get_last_lr()`.", UserWarning)
+
+        if self.last_epoch == 0:
+            return [self.warmup_start_lr for _ in self.optimizer.param_groups]
+        elif self.last_epoch < self.warmup_epochs:
+            return [
+                group['lr'] + (base_lr - self.warmup_start_lr) / max(1, self.warmup_epochs)
+                for base_lr, group in zip(self.base_lrs, self.optimizer.param_groups)
+            ]
+        elif self.last_epoch == self.warmup_epochs:
+            return self.base_lrs
+
+
+        last_epoch = self.last_epoch - self.warmup_epochs
+        T_max = self.T_max - self.warmup_epochs
+
+        return [
+            max(self.eta_min, float(T_max - last_epoch) / float(max(1, T_max)) * group['initial_lr'])
+            for group in self.optimizer.param_groups
+        ]
+
+
 def get_parameter_names(
     model: torch.nn.Module, forbidden_layer_types: List[torch.nn.Module]
 ) -> List[str]:
@@ -119,7 +173,6 @@ class RMTModelPL(LightningModule):
         }
         self._log("val", metrics, on_step=False, on_epoch=True, batch_size=batch['input_ids'].shape[0])
 
-
     def configure_optimizers(self):
 
         decay_parameters = get_parameter_names(self, ALL_LAYERNORM_LAYERS)
@@ -150,7 +203,8 @@ class RMTModelPL(LightningModule):
         monitor = options.pop("monitor", "val/loss")
 
         lr_scheduler = {
-            "scheduler": LinearWarmupCosineAnnealingLR(optimizer, **options),
+            # "scheduler": LinearWarmupCosineAnnealingLR(optimizer, **options),
+            "scheduler": LinearWarmupLinearLR(optimizer, **options),
             "interval": interval,
             "monitor": monitor,
         }
@@ -158,15 +212,5 @@ class RMTModelPL(LightningModule):
         return [optimizer], [lr_scheduler]
 
     def _log(self, prefix, log_dict, **kwargs):
-        on_step = kwargs.pop("on_step", True)
-        on_epoch = kwargs.pop("on_epoch", True)
-        prog_bar = kwargs.pop("prog_bar", True)
         for k, v in log_dict.items():
-            self.log(
-                f"{prefix}/{k}",
-                v,
-                on_step=on_step,
-                on_epoch=on_epoch,
-                prog_bar=prog_bar,
-                **kwargs,
-            )
+            self.log(f"{prefix}/{k}", v, **kwargs)
