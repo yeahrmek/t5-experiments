@@ -171,7 +171,8 @@ class RMTModelPL(LightningModule):
             "loss": out["loss"],
             "perplexity": torch.exp(out["loss"])
         }
-        self._log("val", metrics, on_step=False, on_epoch=True, batch_size=batch['input_ids'].shape[0])
+        self._log("val", metrics, on_step=False, on_epoch=True, sync_dist=True,
+                  batch_size=batch['input_ids'].shape[0])
 
     def configure_optimizers(self):
 
