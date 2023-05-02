@@ -2,21 +2,21 @@ import importlib
 import logging
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Optional, Tuple
 
 import torch
 from jsonargparse import ArgumentParser
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.loggers import WandbLogger
-from transformers import AutoTokenizer  # noqa: E402
-from lm_experiments_tools.lean_dataset import RMTDocsDataLoader, RMTDocsDataset
 from pytorch_lightning.callbacks import (
     EarlyStopping,
     LearningRateMonitor,
     ModelCheckpoint,
 )
-from modeling_rmt.lightning import RMTModelPL
+from pytorch_lightning.loggers import WandbLogger
+from transformers import AutoTokenizer  # noqa: E402
 
+from lean_dataset import RMTDocsDataLoader, RMTDocsDataset
+from modeling_rmt.lightning import RMTModelPL
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -36,7 +36,7 @@ def get_cls_by_name(name: str) -> type:
     Returns:
         type: found class for `name`
     """
-    module_name, cls_name = name.split(':')
+    module_name, cls_name = name.split(":")
     return getattr(importlib.import_module(module_name), cls_name)
 
 
@@ -45,6 +45,7 @@ def setup_parser():
     parser.add_argument("--task_name", type=str, help="Task name, wikitext, ...")
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
+    parser.add_arguments('--logger.resume', type=bool, default=False, help='Indicate whether logger should write to a specified run')
     parser.add_argument("--resume_training", type=bool, default=False)
     parser.add_argument(
         "--validate_only",
@@ -93,7 +94,10 @@ def setup_parser():
         help="RMT model class name to use (default: transformers:BertForPreTraining)",
     )
     parser.add_argument(
-        "--pretrained_ckpt", type=str, default=None, help="pretrained model checkpoint path"
+        "--pretrained_ckpt",
+        type=Optional[str],
+        default=None,
+        help="pretrained model checkpoint path",
     )
     parser.add_argument(
         "--backbone_cls",
@@ -290,7 +294,7 @@ def setup_env_and_args(cfg):
     # set current working dir
     cfg.working_dir = str(Path(cfg.working_dir).expanduser().absolute())
     os.chdir(cfg.working_dir)
-    if os.environ.get('LOCAL_RANK', 0) == 0:
+    if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"Precision: {cfg.trainer.precision}")
 
     # Aydar # Pass memory settings to pretrained model
@@ -305,8 +309,12 @@ def setup_env_and_args(cfg):
     cfg.curriculum = curriculum
 
     cfg.trainer.val_check_interval = cfg.trainer.val_check_interval // cfg.batch_size
-    cfg.trainer.log_every_n_steps = cfg.trainer.log_every_n_steps // cfg.trainer.accumulate_grad_batches
-    cfg.lr_scheduler.warmup_epochs = cfg.lr_scheduler.warmup_epochs // cfg.trainer.accumulate_grad_batches
+    cfg.trainer.log_every_n_steps = (
+        cfg.trainer.log_every_n_steps // cfg.trainer.accumulate_grad_batches
+    )
+    cfg.lr_scheduler.warmup_epochs = (
+        cfg.lr_scheduler.warmup_epochs // cfg.trainer.accumulate_grad_batches
+    )
 
 
 def get_tokenizer(cfg):
@@ -315,18 +323,17 @@ def get_tokenizer(cfg):
 
 
 def get_logger(cfg):
-
     Path(cfg.logger.save_dir).mkdir(parents=True, exist_ok=True)
 
     config = cfg.logger.as_dict()
-    config['config'] = cfg.as_dict()
+    config["config"] = cfg.as_dict()
     config["id"] = cfg.logger.id if cfg.logger.resume else None
 
     wandb_logger = WandbLogger(**config)
 
-    wandb_logger.LOGGER_JOIN_CHAR = '/'
+    wandb_logger.LOGGER_JOIN_CHAR = "/"
 
-    if os.environ.get('LOCAL_RANK', 0) == 0:
+    if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"Logger run_id: {wandb_logger.version}")
         logger.info(f"Log_dir: {wandb_logger.save_dir}")
 
@@ -335,22 +342,26 @@ def get_logger(cfg):
 
 def get_datasets(cfg, tokenizer):
     # get datasets
-    segment_size = cfg.input_size - 2 * cfg.num_mem_tokens - tokenizer.num_special_tokens_to_add()
-    if os.environ.get('LOCAL_RANK', 0) == 0:
+    segment_size = (
+        cfg.input_size - 2 * cfg.num_mem_tokens - tokenizer.num_special_tokens_to_add()
+    )
+    if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"preparing dataset for {cfg.task_name}")
         logger.info(f"segment_size = {segment_size}")
 
     datasets = {}
     data_dir = Path(cfg.data_dir)
     for split in ["train", "val"]:
-        if (data_dir / f'{split}_tokenized.ckpt').exists():
-            datasets[split] = RMTDocsDataset.load_tokenized(data_dir / f'{split}_tokenized.ckpt')
+        if (data_dir / f"{split}_tokenized.ckpt").exists():
+            datasets[split] = RMTDocsDataset.load_tokenized(
+                data_dir / f"{split}_tokenized.ckpt"
+            )
         else:
             datasets[split] = RMTDocsDataset(
                 data_dir / split, tokenizer, cfg.max_n_segments
             )
             datasets[split].tokenize()
-            datasets[split].save_tokenized(str(data_dir / f'{split}_tokenized.ckpt'))
+            datasets[split].save_tokenized(str(data_dir / f"{split}_tokenized.ckpt"))
         datasets[split].split_to_segments(segment_size)
 
     return datasets
@@ -362,7 +373,7 @@ def get_dataloaders(cfg, datasets):
         "num_workers": cfg.data_n_workers,
         "batch_size": cfg.batch_size,
         # * cfg.gradient_accumulation_steps,  # batch size per GPU
-        "drop_last": True
+        "drop_last": True,
     }
 
     loaders = {}
@@ -397,21 +408,23 @@ def get_model(cfg, tokenizer):
 
     # Load backbone model
     backbone_cls = get_cls_by_name(cfg.backbone_cls)
-    if os.environ.get('LOCAL_RANK', 0) == 0:
+    if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"Using model class: {backbone_cls}")
 
     backbone = backbone_cls.from_pretrained(cfg.backbone_cpt)
 
     # Load RMT model
     rmt_cls = get_cls_by_name(cfg.rmt_cls)
-    if os.environ.get('LOCAL_RANK', 0) == 0:
+    if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"Wrapping in: {rmt_cls}")
 
     rmt_model = rmt_cls(backbone, **rmt_config)
 
     if cfg.pretrained_ckpt:
-        logger.info(f'Loading checkpoint: {cfg.pretrained_ckpt}')
-        pl_model = RMTModelPL.load_from_checkpoint(cfg.pretrained_ckpt, rmt_model=rmt_model)
+        logger.info(f"Loading checkpoint: {cfg.pretrained_ckpt}")
+        pl_model = RMTModelPL.load_from_checkpoint(
+            cfg.pretrained_ckpt, rmt_model=rmt_model
+        )
     else:
         pl_model = RMTModelPL(rmt_model, cfg)
 
@@ -419,7 +432,7 @@ def get_model(cfg, tokenizer):
         for n, p in pl_model.named_parameters():
             if "memory" not in n and "wte" not in n:
                 p.requires_grad = False
-        if os.environ.get('LOCAL_RANK', 0) == 0:
+        if os.environ.get("LOCAL_RANK", 0) == 0:
             logger.info(f"Frozen moodel weights except embeddings")
 
     return pl_model
@@ -431,16 +444,17 @@ def get_trainer_callbacks(n_segments):
             monitor="val/loss",
             mode="min",
             save_last=True,
-            save_top_k=3,
+            save_top_k=1,
             auto_insert_metric_name=False,
-            filename=f"n_segments={n_segments}" + "-epoch={epoch:02d}-step={step}-loss={val/loss:.4f}",
+            filename=f"n_segments={n_segments}"
+            + "-epoch={epoch:02d}-step={step}-loss={val/loss:.4f}",
         ),
         LearningRateMonitor(logging_interval="step"),
         EarlyStopping(
             monitor="val/loss",
             mode="min",
             strict=False,
-            patience=10,
+            patience=3,
             check_finite=False,
         ),
     ]
@@ -467,17 +481,17 @@ if __name__ == "__main__":
     resume_ckpt_path = None
     if cfg.resume_training:
         ckpt_dir = (
-            Path(wandb_logger.save_dir) /
-            wandb_logger._project /
-            wandb_logger.version /
-            "checkpoints"
+            Path(wandb_logger.save_dir)
+            / wandb_logger._project
+            / wandb_logger.version
+            / "checkpoints"
         )
-        resume_ckpt_path = str(ckpt_dir / 'last.ckpt')
+        resume_ckpt_path = str(ckpt_dir / "last.ckpt")
 
-        for path in ckpt_dir.glob('*.ckpt'):
-            if 'n_segments=' in path.name:
-                n_segments = path.name.split('n_segments=')[1]
-                n_segments = int(n_segments.split('-epoch')[0])
+        for path in ckpt_dir.glob("*.ckpt"):
+            if "n_segments=" in path.name:
+                n_segments = path.name.split("n_segments=")[1]
+                n_segments = int(n_segments.split("-epoch")[0])
                 max_n_segments_ckpt = max(max_n_segments_ckpt, n_segments)
 
         logger.info(f"Resuming from: {resume_ckpt_path}")
@@ -493,22 +507,23 @@ if __name__ == "__main__":
             ds.set_max_n_segments(max_n_segments)
         loaders = get_dataloaders(cfg, datasets)
 
-
         cfg.max_n_segments = max_n_segments
         cfg.trainer.max_epochs = n_epochs
-        model.cfg.lr_scheduler.T_max = len(loaders['train']) // cfg.trainer.accumulate_grad_batches
+        model.cfg.lr_scheduler.T_max = (
+            len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
+        )
         model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"
 
         trainer_options = cfg.trainer.as_dict()
-        trainer_options['logger'] = wandb_logger
-        trainer_options['callbacks'] = get_trainer_callbacks(max_n_segments)
+        trainer_options["logger"] = wandb_logger
+        trainer_options["callbacks"] = get_trainer_callbacks(max_n_segments)
         trainer = Trainer(**trainer_options)
 
-        logger.info('-' * 80)
-        logger.info(f'Max number of segments: {max_n_segments}')
+        logger.info("-" * 80)
+        logger.info(f"Max number of segments: {max_n_segments}")
         logger.info(f'N batches per epoch: {len(loaders["train"])}')
-        logger.info(f'Trainer max epochs: {trainer.max_epochs}')
+        logger.info(f"Trainer max epochs: {trainer.max_epochs}")
 
         model._module.reset_memory()
 
@@ -517,7 +532,7 @@ if __name__ == "__main__":
         else:
             trainer.fit(
                 model,
-                train_dataloaders=loaders['train'],
-                val_dataloaders=loaders['val'],
-                ckpt_path=resume_ckpt_path
+                train_dataloaders=loaders["train"],
+                val_dataloaders=loaders["val"],
+                ckpt_path=resume_ckpt_path,
             )

@@ -1,10 +1,15 @@
-id=bfv00lo5
-logger_resume=true
+id=null
+logger_resume=false
 resume_training=false
-pretrained_ckpt="./logs/rmt_lean/bfv00lo5/checkpoints/last.ckpt"
+pretrained_ckpt="./logs/rmt_lean/bfv00lo5/checkpoints/n_segments=3-epoch=00-step=468-loss=0.9029.ckpt"
+# pretrained_ckpt=null
 
-resume_curriculum="1 1 1 2 1 3 1 4 1 5"
-resume_curriculum="1 2 1 3 1 4 1 5"
+num_mem_tokens=20
+resume_curriculum="2 1 1 2 1 3 1 4 1 5"
+# resume_curriculum="1 2 1 3 1 4 1 5"
+# resume_curriculum="1 3 1 4 1 5"
+
+lr=1e-5
 
 
 python run_finetuning_lean_pl.py \
@@ -22,11 +27,11 @@ python run_finetuning_lean_pl.py \
   --backbone_cls transformers:GPTNeoForCausalLM \
   --backbone_cpt ../mix2_2zywvs69.ckpt \
   --rmt_cls modeling_rmt:RMTDecoderForCausalLM \
-  --num_mem_tokens 10 \
+  --num_mem_tokens $num_mem_tokens \
   --max_n_segments 1 \
   --curriculum $resume_curriculum \
   --batch_size 2 \
-  --optimizer.lr 1e-5 \
+  --optimizer.lr $lr \
   --lr_scheduler.warmup_epochs 1000 \
   --trainer.accumulate_grad_batches 16 \
   --trainer.limit_val_batches null \
@@ -35,4 +40,4 @@ python run_finetuning_lean_pl.py \
   --trainer.num_sanity_val_steps 1 \
   --trainer.accelerator auto \
   --trainer.devices auto \
-  --trainer.strategy ddp_find_unused_parameters_false
+  --trainer.strategy deepspeed_stage_2

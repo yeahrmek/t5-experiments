@@ -14,7 +14,7 @@ from transformers import HfArgumentParser
 from pytorch_lightning.loggers import WandbLogger
 
 import lm_experiments_tools.optimizers as optimizers  # noqa: E402
-from lm_experiments_tools.lean_dataset import RMTDocsDataLoader, RMTDocsDataset
+from lean_dataset import RMTDocsDataLoader, RMTDocsDataset
 from lm_experiments_tools import TrainerArgs
 from lm_experiments_tools.trainer_tbptt import Trainer
 from lm_experiments_tools.utils import collect_run_configuration, get_cls_by_name

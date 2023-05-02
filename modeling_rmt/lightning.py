@@ -164,6 +164,7 @@ class RMTModelPL(LightningModule):
             },
             batch_size=batch['input_ids'].shape[0]
         )
+        return out['loss']
 
     def validation_step(self, batch, batch_idx):
         out = self(batch)
