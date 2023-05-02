@@ -434,6 +434,7 @@ def get_model(cfg, tokenizer):
         pl_model = RMTModelPL.load_from_checkpoint(
             cfg.pretrained_ckpt, rmt_model=rmt_model
         )
+        pl_model.save_hyperparameters(ignore=['rm_model'])
     else:
         pl_model = RMTModelPL(rmt_model, cfg)
 
@@ -517,10 +518,11 @@ if __name__ == "__main__":
         loaders = get_dataloaders(cfg, datasets)
 
         cfg.max_n_segments = max_n_segments
-        cfg.trainer.max_epochs = n_epochs
+        cfg.trainer.max_steps = n_epochs * len(loaders["train"])
         model.cfg.lr_scheduler.T_max = (
-            n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
+            cfg.trainer.max_steps // cfg.trainer.accumulate_grad_batches
         )
+        cfg.trainer.max_epochs = None
         model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"
 
@@ -538,10 +540,16 @@ if __name__ == "__main__":
 
         if cfg.validate_only:
             trainer.validate(model, loaders["val"])
-        else:
+        elif max_n_segments == max_n_segments_ckpt:
             trainer.fit(
                 model,
                 train_dataloaders=loaders["train"],
                 val_dataloaders=loaders["val"],
                 ckpt_path=resume_ckpt_path,
+            )
+        else:
+            trainer.fit(
+                model,
+                train_dataloaders=loaders["train"],
+                val_dataloaders=loaders["val"],
             )

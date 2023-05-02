@@ -1,5 +1,6 @@
 import math
 import warnings
+from pathlib import Path
 from typing import List
 
 import torch
@@ -149,7 +150,16 @@ class RMTModelPL(LightningModule):
         super().__init__()
         self._module = rmt_model
         self.cfg = cfg
-        self.save_hyperparameters(ignore=['rmt_model'])
+
+        try:
+            self.save_hyperparameters(ignore=['rmt_model'])
+        except KeyError:
+            warnings.warn(
+                "Can't save hyperparameters. You are probably calling `.load_from_checkpoint()` method. "
+                + "In this case call save_hyperparameters() manually.",
+                UserWarning,
+            )
+
 
     def forward(self, x, **kwargs):
         return self._module(**x)
@@ -216,3 +226,27 @@ class RMTModelPL(LightningModule):
     def _log(self, prefix, log_dict, **kwargs):
         for k, v in log_dict.items():
             self.log(f"{prefix}/{k}", v, **kwargs)
+
+    @classmethod
+    def load_from_checkpoint(cls, ckpt_path, map_location=None, strict=True, **init_kwargs):
+        ckpt_path = Path(ckpt_path)
+        if not ckpt_path.is_dir():
+            model = super(LightningModule, cls).load_from_checkpoint(
+                ckpt_path, map_location=map_location, strict=strict
+            )
+        else:
+            state = torch.load(
+                ckpt_path / "checkpoint" / "mp_rank_00_model_states.pt",
+                map_location=map_location,
+            )
+            state["state_dict"] = state.pop("module")
+
+            for key in list(state["state_dict"].keys()):
+                state["state_dict"][key.replace("_forward_module.", "")] = state[
+                    "state_dict"
+                ].pop(key)
+
+            model = cls(**init_kwargs, **state["hyper_parameters"])
+            model._set_hparams(state["hyper_parameters"])
+            model.load_state_dict(state["state_dict"], strict=strict)
+        return model

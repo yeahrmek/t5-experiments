@@ -1,13 +1,14 @@
-id=null
-logger_resume=false
+id=7xxtf5sm
+logger_resume=true
 resume_training=false
 # pretrained_ckpt="./logs/rmt_lean/bfv00lo5/checkpoints/n_segments=3-epoch=00-step=468-loss=0.9029.ckpt"
-pretrained_ckpt=null
+pretrained_ckpt="./logs/rmt_lean/7xxtf5sm/checkpoints/n_segments=4-epoch=00-step=156-loss=0.8870.ckpt"
+# pretrained_ckpt=null
 
 num_mem_tokens=10
-curriculum="[2,1,1,2,1,3,1,4,1,5]"
+# curriculum="[2,1,1,2,1,3,1,4,1,5]"
 # curriculum="[1,2,1,3,1,4,1,5]"
-# curriculum="[1,4,1,5]"
+curriculum="[1,4,1,5]"
 
 lr=1e-5
 
