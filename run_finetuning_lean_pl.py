@@ -45,7 +45,7 @@ def setup_parser():
     parser.add_argument("--task_name", type=str, help="Task name, wikitext, ...")
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
-    parser.add_arguments('--logger.resume', type=bool, default=False, help='Indicate whether logger should write to a specified run')
+    parser.add_argument('--logger.resume', type=bool, default=False, help='Indicate whether logger should write to a specified run')
     parser.add_argument("--resume_training", type=bool, default=False)
     parser.add_argument(
         "--validate_only",
