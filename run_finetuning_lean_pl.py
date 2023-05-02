@@ -2,7 +2,7 @@ import importlib
 import logging
 import os
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import torch
 from jsonargparse import ArgumentParser
@@ -45,7 +45,14 @@ def setup_parser():
     parser.add_argument("--task_name", type=str, help="Task name, wikitext, ...")
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
-    parser.add_argument('--logger.resume', type=bool, default=False, help='Indicate whether logger should write to a specified run')
+
+    # For newer version of pytorch_lighning we add several parameters of logger explicitly
+    try:
+        parser.add_argument("--logger.resume", type=bool, default=False)
+        parser.add_argument("--logger.entity", type=Optional[str], default=None)
+    except:
+        pass
+
     parser.add_argument("--resume_training", type=bool, default=False)
     parser.add_argument(
         "--validate_only",
@@ -127,8 +134,7 @@ def setup_parser():
     )
     parser.add_argument(
         "--curriculum",
-        type=int,
-        nargs="+",
+        type=List[int],
         help="Scheduler for number of segments to train on. "
         "Input should be in the following format: <n_epochs> <n_segments> <n_epochs> <n_segments> ..."
         "Example: `--curriculum 1 1 1 2 1 5`. "
@@ -309,6 +315,8 @@ def setup_env_and_args(cfg):
     cfg.curriculum = curriculum
 
     cfg.trainer.val_check_interval = cfg.trainer.val_check_interval // cfg.batch_size
+    if cfg.trainer.log_every_n_steps is None:
+        cfg.trainer.log_every_n_steps = 50
     cfg.trainer.log_every_n_steps = (
         cfg.trainer.log_every_n_steps // cfg.trainer.accumulate_grad_batches
     )
@@ -318,6 +326,7 @@ def setup_env_and_args(cfg):
 
 
 def get_tokenizer(cfg):
+    logger.info(f"Loading tokenizer from {cfg.tokenizer}")
     tokenizer = AutoTokenizer.from_pretrained(cfg.tokenizer)
     return tokenizer
 
@@ -510,7 +519,7 @@ if __name__ == "__main__":
         cfg.max_n_segments = max_n_segments
         cfg.trainer.max_epochs = n_epochs
         model.cfg.lr_scheduler.T_max = (
-            len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
+            n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
         )
         model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"

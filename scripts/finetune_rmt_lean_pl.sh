@@ -1,13 +1,13 @@
 id=null
 logger_resume=false
 resume_training=false
-pretrained_ckpt="./logs/rmt_lean/bfv00lo5/checkpoints/n_segments=3-epoch=00-step=468-loss=0.9029.ckpt"
-# pretrained_ckpt=null
+# pretrained_ckpt="./logs/rmt_lean/bfv00lo5/checkpoints/n_segments=3-epoch=00-step=468-loss=0.9029.ckpt"
+pretrained_ckpt=null
 
-num_mem_tokens=20
-resume_curriculum="2 1 1 2 1 3 1 4 1 5"
-# resume_curriculum="1 2 1 3 1 4 1 5"
-# resume_curriculum="1 3 1 4 1 5"
+num_mem_tokens=10
+curriculum="[2,1,1,2,1,3,1,4,1,5]"
+# curriculum="[1,2,1,3,1,4,1,5]"
+# curriculum="[1,4,1,5]"
 
 lr=1e-5
 
@@ -29,7 +29,7 @@ python run_finetuning_lean_pl.py \
   --rmt_cls modeling_rmt:RMTDecoderForCausalLM \
   --num_mem_tokens $num_mem_tokens \
   --max_n_segments 1 \
-  --curriculum $resume_curriculum \
+  --curriculum=$curriculum \
   --batch_size 2 \
   --optimizer.lr $lr \
   --lr_scheduler.warmup_epochs 1000 \

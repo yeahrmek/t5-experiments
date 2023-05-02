@@ -129,16 +129,6 @@ class RMTDocsDataset:
             if n_segments == 0:
                 continue
 
-            # if not self.drop_last:
-            #     indices = torch.arange(total_segments, total_segments + n_segments)
-            # elif n_segments >= self._max_n_segments:
-            #     indices = torch.arange(
-            #         total_segments,
-            #         total_segments + n_segments - self._max_n_segments + 1,
-            #     )
-            # else:
-            #     indices = torch.LongTensor()
-
             # always drop last
             if n_segments >= self._max_n_segments:
                 indices = torch.arange(
@@ -161,33 +151,6 @@ class RMTDocsDataset:
         idx = self.batch_indices[index]
         input_ids = self.input_ids[idx : idx + self._max_n_segments]
         attn_mask = self.attn_masks[idx : idx + self._max_n_segments]
-
-        # if not self.drop_last:
-        #     # drop segments with different segment_id and pad
-        #     i = 0
-        #     segment_ids = self._sequence_id[idx : idx + self._max_n_segments]
-        #     while i < len(segment_ids) and segment_ids[i] == segment_ids[i]:
-        #         i += 1
-
-        #     pad_len = self._max_n_segments - i
-        #     if pad_len:
-        #         input_ids = input_ids[:i]
-        #         attn_mask = attn_mask[:i]
-
-        #         input_ids.extend(
-        #             [
-        #                 torch.LongTensor(self._segment_len).fill_(
-        #                     self.tokenizer.pad_token_id
-        #                 )
-        #                 for _ in range(pad_len)
-        #             ]
-        #         )
-        #         attn_mask.extend(
-        #             [
-        #                 torch.zeros(self._segment_len, dtype=torch.long)
-        #                 for _ in range(pad_len)
-        #             ]
-        #         )
 
         output = []
         for ids, mask in zip(input_ids, attn_mask):
