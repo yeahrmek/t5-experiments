@@ -429,7 +429,7 @@ def get_model(cfg, tokenizer):
 
     rmt_model = rmt_cls(backbone, **rmt_config)
 
-    if cfg.pretrained_ckpt:
+    if cfg.pretrained_ckpt and not cfg.resume_training:
         logger.info(f"Loading checkpoint: {cfg.pretrained_ckpt}")
         pl_model = RMTModelPL.load_from_checkpoint(
             cfg.pretrained_ckpt, rmt_model=rmt_model
@@ -496,7 +496,16 @@ if __name__ == "__main__":
             / wandb_logger.version
             / "checkpoints"
         )
-        resume_ckpt_path = str(ckpt_dir / "last.ckpt")
+        best_version = None
+        resume_ckpt_path = ckpt_dir / 'last.ckpt'
+        for path in ckpt_dir.glob('last*.ckpt'):
+            if path.name != 'last.ckpt':
+                version = int(path.name.split('-v')[1].split('.ckpt')[0])
+                if best_version is None or version > best_version:
+                    resume_ckpt_path = path
+                    best_version = version
+
+        breakpoint()
 
         for path in ckpt_dir.glob("*.ckpt"):
             if "n_segments=" in path.name:
@@ -518,11 +527,9 @@ if __name__ == "__main__":
         loaders = get_dataloaders(cfg, datasets)
 
         cfg.max_n_segments = max_n_segments
-        cfg.trainer.max_steps = n_epochs * len(loaders["train"])
-        model.cfg.lr_scheduler.T_max = (
-            cfg.trainer.max_steps // cfg.trainer.accumulate_grad_batches
-        )
-        cfg.trainer.max_epochs = None
+        cfg.trainer.max_steps = n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
+        model.cfg.lr_scheduler.T_max = (cfg.trainer.max_steps)
+        # cfg.trainer.max_epochs = n_epochs
         model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"
 
@@ -534,6 +541,7 @@ if __name__ == "__main__":
         logger.info("-" * 80)
         logger.info(f"Max number of segments: {max_n_segments}")
         logger.info(f'N batches per epoch: {len(loaders["train"])}')
+        logger.info(f'Trainer max steps: {trainer.max_steps}')
         logger.info(f"Trainer max epochs: {trainer.max_epochs}")
 
         model._module.reset_memory()
