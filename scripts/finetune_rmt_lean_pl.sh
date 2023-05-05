@@ -1,11 +1,11 @@
-id=t3bw78he
+id=6rqkrhxp
 logger_resume=true
 resume_training=true
 # pretrained_ckpt="./logs/rmt_lean/6rqkrhxp/checkpoints/last.ckpt"
 # pretrained_ckpt="./logs/rmt_lean/7xxtf5sm/checkpoints/n_segments=4-epoch=00-step=156-loss=0.8870.ckpt"
-pretrained_ckpt="./logs/rmt_lean/t3bw78he/checkpoints/"
+pretrained_ckpt="./logs/rmt_lean/6rqkrhxp/checkpoints/"
 
-num_mem_tokens=10
+num_mem_tokens=20
 # curriculum="[1,1,1,2,1,3,1,4,1,5]"
 curriculum="[1,3,1,4,1,5]"
 

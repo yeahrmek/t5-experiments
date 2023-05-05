@@ -460,13 +460,13 @@ def get_trainer_callbacks(n_segments):
             + "-epoch={epoch:02d}-step={step}-loss={val/loss:.4f}",
         ),
         LearningRateMonitor(logging_interval="step"),
-        EarlyStopping(
-            monitor="val/loss",
-            mode="min",
-            strict=False,
-            patience=3,
-            check_finite=False,
-        ),
+        # EarlyStopping(
+        #     monitor="val/loss",
+        #     mode="min",
+        #     strict=False,
+        #     patience=3,
+        #     check_finite=False,
+        # ),
     ]
     return callbacks
 
@@ -505,8 +505,6 @@ if __name__ == "__main__":
                     resume_ckpt_path = path
                     best_version = version
 
-        breakpoint()
-
         for path in ckpt_dir.glob("*.ckpt"):
             if "n_segments=" in path.name:
                 n_segments = path.name.split("n_segments=")[1]
@@ -514,6 +512,9 @@ if __name__ == "__main__":
                 max_n_segments_ckpt = max(max_n_segments_ckpt, n_segments)
 
         logger.info(f"Resuming from: {resume_ckpt_path}")
+        model = RMTModelPL.load_from_checkpoint(
+            resume_ckpt_path, rmt_model=model._module
+        )
         logger.info(f"Resuming n_segments: {max_n_segments_ckpt}")
 
     for n_epochs, max_n_segments in zip(
@@ -528,8 +529,7 @@ if __name__ == "__main__":
 
         cfg.max_n_segments = max_n_segments
         cfg.trainer.max_steps = n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
-        model.cfg.lr_scheduler.T_max = (cfg.trainer.max_steps)
-        # cfg.trainer.max_epochs = n_epochs
+        model.cfg.lr_scheduler.T_max = cfg.trainer.max_steps
         model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"
 

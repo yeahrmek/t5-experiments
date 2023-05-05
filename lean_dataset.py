@@ -189,7 +189,6 @@ def collate_docs_fn(
 
 class RMTDocsDataLoader(DataLoader):
     def __init__(self, *args, **kwargs):
-        print(kwargs.get('collate_fn', None))
         super().__init__(*args, **kwargs)
         self.collate_fn = collate_docs_fn
 

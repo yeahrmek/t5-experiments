@@ -160,7 +160,6 @@ class RMTModelPL(LightningModule):
                 UserWarning,
             )
 
-
     def forward(self, x, **kwargs):
         return self._module(**x)
 

@@ -14,6 +14,7 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         super().__init__(*args, **kwargs)
         self._actual_max_n_segments = self.rmt_config['max_n_segments']
         self.rmt_config['max_n_segments'] = 1
+        self._n_resets = 0
 
     def extend_word_embeddings(self, num_mem_tokens, tokenizer):
         vocab_size = self.model.config.vocab_size
@@ -72,6 +73,7 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         ):
             init_memory = self.set_memory(input_ids.shape)
             self.memory_states = [(None, init_memory)]
+            self._n_resets += 1
 
         self._forward_counter += 1
 
