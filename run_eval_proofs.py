@@ -60,6 +60,11 @@ def get_model(cfg, tokenizer):
 
     pl_model = RMTModelPL.load_from_checkpoint(cfg.pretrained_ckpt, rmt_model=rmt_model)
 
+    try:
+        pl_model = torch.compile(pl_model)
+    except:
+        pass
+
     return pl_model
 
 
