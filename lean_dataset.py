@@ -1,7 +1,10 @@
+import json
 import math
+from itertools import chain
 from pathlib import Path
 from typing import Dict, List
 
+import numpy as np
 import torch
 from datasets import Dataset
 from torch.utils.data import DataLoader
@@ -16,7 +19,7 @@ class RMTDocsDataset:
         max_n_segments: int = -1,
         drop_last: bool = True,
     ):
-        self.data_dir = data_dir
+        self.data_dir = str(Path(data_dir).resolve())
         self.tokenizer = tokenizer
         self.drop_last = drop_last
         self._max_n_segments = max_n_segments
@@ -66,9 +69,9 @@ class RMTDocsDataset:
                 "data_dir": self.data_dir,
                 "tokenizer": self.tokenizer,
                 "drop_last": self.drop_last,
-                "max_n_segments": self._max_n_segments
+                "max_n_segments": self._max_n_segments,
             },
-            path
+            path,
         )
 
     @classmethod
@@ -78,7 +81,7 @@ class RMTDocsDataset:
             state_dict["data_dir"],
             state_dict["tokenizer"],
             state_dict["max_n_segments"],
-            state_dict["drop_last"]
+            state_dict["drop_last"],
         )
         dataset.tokenized_documents = state_dict["tokenized_documents"]
         return dataset
@@ -89,7 +92,6 @@ class RMTDocsDataset:
         self.attn_masks = []
         self._sequence_id = []
         for i, tensor in enumerate(self.tokenized_documents):
-
             n_segments = math.ceil(len(tensor) / segment_len)
 
             if n_segments == 0:
@@ -123,7 +125,6 @@ class RMTDocsDataset:
         self.batch_indices = []
         total_segments = 0
         for i, tensor in enumerate(self.tokenized_documents):
-
             n_segments = math.ceil(len(tensor) / self._segment_len)
 
             if n_segments == 0:
@@ -162,7 +163,153 @@ class RMTDocsDataset:
                     "input_ids": ids,
                     "attention_mask": mask,
                     "labels": labels,
+                }
+            )
 
+        return output
+
+
+class RMTProofsDataset:
+    def __init__(
+        self,
+        data_dir: str,
+        lemmas_path: str,
+        tokenizer: PreTrainedTokenizer,
+        max_n_segments: int = -1,
+        segment_length: int = 0,
+    ):
+        self.data_dir = str(Path(data_dir).resolve())
+        self.lemmas_path = str(Path(lemmas_path).resolve())
+        self.tokenizer = tokenizer
+        self._max_n_segments = max_n_segments
+        self.segment_length = segment_length
+
+        self.dataset = Dataset.from_parquet(
+            [str(x) for x in Path(data_dir).glob("*.parquet")]
+        )
+
+        with open(lemmas_path) as fh:
+            self.lemmas = json.load(fh)
+
+        self.tokenized = {}
+
+    def __len__(self) -> int:
+        return len(self.tokenized.get("decl_def", []))
+
+    def set_max_n_segments(self, max_n_segments: int) -> None:
+        self._max_n_segments = max_n_segments
+
+    def tokenize(self) -> None:
+        self.tokenized["decl_def"] = self.tokenizer(
+            self.dataset["decl_def"],
+            truncation=False,
+            padding=False,
+        )["input_ids"]
+
+        self.tokenized["proof"] = self.tokenizer(
+            [f"[PROOFSTEP] {x}" for x in self.dataset["full_proof"]],
+            truncation=False,
+            padding=False,
+        )["input_ids"]
+
+        args_defs_tokenized = []
+        for doc in self.dataset:
+            args_defs = [
+                f"<lemma> {x.strip()}" for x in doc["args_defs"].split("<lemma>") if x.strip()
+            ]
+            if args_defs:
+                args_defs_tokenized.append(
+                    self.tokenizer(args_defs, truncation=False, padding=False)[
+                        "input_ids"
+                    ]
+                )
+            else:
+                args_defs_tokenized.append([])
+
+        self.tokenized["args"] = args_defs_tokenized
+
+    def save_tokenized(self, path: str) -> None:
+        torch.save(
+            {
+                "tokenized": self.tokenized,
+                "data_dir": self.data_dir,
+                "lemmas_path": self.lemmas_path,
+                "tokenizer": self.tokenizer,
+                "max_n_segments": self._max_n_segments,
+            },
+            path,
+        )
+
+    @classmethod
+    def load_tokenized(cls, path: str) -> "RMTDocsDataset":
+        state_dict = torch.load(path)
+        dataset = cls(
+            state_dict["data_dir"],
+            state_dict["lemmas_path"],
+            state_dict["tokenizer"],
+            state_dict["max_n_segments"],
+        )
+        dataset.tokenized = state_dict["tokenized"]
+        return dataset
+
+    def __getitem__(self, index: int) -> List[Dict[str, torch.Tensor]]:
+        """
+        Return a list of `max_n_segments` segments with attention masks
+        """
+        decl_def = self.tokenized["decl_def"][index]
+        proof = self.tokenized["proof"][index]
+        args = self.tokenized["args"][index]
+
+        total_length = len(decl_def) + len(proof) + sum(len(x) for x in args)
+
+        # append random lemmas while total sequence length is less than segment_len * n_segments
+        all_lemmas = list(self.lemmas.values())
+        rand_lemmas = [all_lemmas[i] for i in np.random.permutation(len(self.lemmas))]
+
+        i = 0
+        sequence_length = self.segment_length * self._max_n_segments
+        while total_length < sequence_length:
+            args.append(self.tokenizer(rand_lemmas[i])["input_ids"])
+            i += 1
+            total_length += len(args[-1])
+
+        # drop last arg if length exceeds sequence_length
+        if total_length > sequence_length and args:
+            args.pop()
+
+        # shuffle args
+        args = [args[i] for i in np.random.permutation(len(args))]
+
+        input_ids_list = torch.LongTensor([*decl_def, *chain(*args), *proof])
+
+        # if still length exceeds sequence_length just truncate last arg, but not the proof
+        if len(input_ids_list) > sequence_length:
+            proof = proof[:self.segment_length]
+            proof_tensor = input_ids_list[-len(proof):].clone()
+            input_ids_list = input_ids_list[:sequence_length].clone()
+            input_ids_list[-len(proof):] = proof_tensor
+
+        n_segments = min(self._max_n_segments, math.ceil(len(input_ids_list) / self.segment_length))
+        total_length = self.segment_length * n_segments
+
+        input_ids = torch.LongTensor(total_length).fill_(self.tokenizer.pad_token_id)
+        input_ids[:len(input_ids_list)] = input_ids_list
+        attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+        attention_mask[len(input_ids_list):] = 0
+
+        input_ids = input_ids.chunk(n_segments)
+        attention_mask = attention_mask.chunk(n_segments)
+
+        output = []
+        for ids, mask in zip(input_ids, attention_mask):
+            labels = ids.clone()
+            if self.tokenizer.pad_token_id is not None:
+                labels[labels == self.tokenizer.pad_token_id] = -100
+            output.append(
+                {
+                    "input_ids": ids,
+                    "attention_mask": mask,
+                    "labels": labels,
                 }
             )
 
@@ -178,10 +325,7 @@ def collate_docs_fn(
     collated = []
     for segments in zip(*batch):
         collated.append(
-            {
-                key: torch.stack([x[key] for x in segments])
-                for key in segments[0]
-            }
+            {key: torch.stack([x[key] for x in segments]) for key in segments[0]}
         )
 
     return collated
@@ -199,4 +343,3 @@ class RMTDocsDataLoader(DataLoader):
         for batch in super().__iter__():
             for segment in batch:
                 yield segment
-

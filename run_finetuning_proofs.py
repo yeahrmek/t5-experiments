@@ -2,17 +2,20 @@ import importlib
 import logging
 import os
 from pathlib import Path
-from pprint import pprint
 from typing import List, Optional, Tuple
 
 import torch
 from jsonargparse import ArgumentParser
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import (
+    EarlyStopping,
+    LearningRateMonitor,
+    ModelCheckpoint,
+)
 from pytorch_lightning.loggers import WandbLogger
 from transformers import AutoTokenizer  # noqa: E402
 
-from lean_dataset import RMTDocsDataLoader, RMTDocsDataset, RMTProofsDataset
+from lean_dataset import RMTDocsDataLoader, RMTProofsDataset
 from modeling_rmt.lightning import RMTModelPL
 
 logging.basicConfig(
@@ -39,7 +42,7 @@ def get_cls_by_name(name: str) -> type:
 
 def setup_parser():
     parser = ArgumentParser()
-    parser.add_argument("--task_name", type=str, help="Task name: 'lm' or 'proofs'")
+    parser.add_argument("--task_name", type=str, help="Task name, wikitext, ...")
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
 
@@ -321,8 +324,6 @@ def setup_env_and_args(cfg):
         cfg.lr_scheduler.warmup_epochs // cfg.trainer.accumulate_grad_batches
     )
 
-    pprint(cfg.as_dict())
-
 
 def get_tokenizer(cfg):
     logger.info(f"Loading tokenizer from {cfg.tokenizer}")
@@ -349,13 +350,6 @@ def get_logger(cfg):
 
 
 def get_datasets(cfg, tokenizer):
-    if cfg.task_name == "lm":
-        data_cls = RMTDocsDataset
-        split_list = ["train", "val"]
-    elif cfg.task_name == "proofs":
-        data_cls = RMTProofsDataset
-        split_list = ["train", "val_test"]
-
     # get datasets
     segment_size = (
         cfg.input_size - 2 * cfg.num_mem_tokens - tokenizer.num_special_tokens_to_add()
@@ -366,24 +360,18 @@ def get_datasets(cfg, tokenizer):
 
     datasets = {}
     data_dir = Path(cfg.data_dir)
-    for split in split_list:
+    for split in ["train", "val"]:
         if (data_dir / f"{split}_tokenized.ckpt").exists():
-            datasets[split] = data_cls.load_tokenized(
+            datasets[split] = RMTDocsDataset.load_tokenized(
                 data_dir / f"{split}_tokenized.ckpt"
             )
         else:
-            datasets[split] = data_cls(data_dir / split, tokenizer, cfg.max_n_segments)
+            datasets[split] = RMTDocsDataset(
+                data_dir / split, tokenizer, cfg.max_n_segments
+            )
             datasets[split].tokenize()
             datasets[split].save_tokenized(str(data_dir / f"{split}_tokenized.ckpt"))
-
-        if hasattr(datasets[split], 'split_to_segments'):
-            datasets[split].split_to_segments(segment_size)
-        print(f"{split}: {len(datasets[split])}")
-
-    if cfg.task_name == 'proofs':
-        datasets['val'] = datasets.pop('val_test')
-        datasets['train'].segment_length = segment_size
-        datasets['val'].segment_length = segment_size
+        datasets[split].split_to_segments(segment_size)
 
     return datasets
 
@@ -446,7 +434,7 @@ def get_model(cfg, tokenizer):
         pl_model = RMTModelPL.load_from_checkpoint(
             cfg.pretrained_ckpt, rmt_model=rmt_model
         )
-        pl_model.save_hyperparameters(ignore=["rm_model"])
+        pl_model.save_hyperparameters(ignore=['rm_model'])
     else:
         pl_model = RMTModelPL(rmt_model, cfg)
 
@@ -509,10 +497,10 @@ if __name__ == "__main__":
             / "checkpoints"
         )
         best_version = None
-        resume_ckpt_path = ckpt_dir / "last.ckpt"
-        for path in ckpt_dir.glob("last*.ckpt"):
-            if path.name != "last.ckpt":
-                version = int(path.name.split("-v")[1].split(".ckpt")[0])
+        resume_ckpt_path = ckpt_dir / 'last.ckpt'
+        for path in ckpt_dir.glob('last*.ckpt'):
+            if path.name != 'last.ckpt':
+                version = int(path.name.split('-v')[1].split('.ckpt')[0])
                 if best_version is None or version > best_version:
                     resume_ckpt_path = path
                     best_version = version
@@ -540,9 +528,7 @@ if __name__ == "__main__":
         loaders = get_dataloaders(cfg, datasets)
 
         cfg.max_n_segments = max_n_segments
-        cfg.trainer.max_steps = (
-            n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
-        )
+        cfg.trainer.max_steps = n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
         model.cfg.lr_scheduler.T_max = cfg.trainer.max_steps
         model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"
@@ -555,7 +541,7 @@ if __name__ == "__main__":
         logger.info("-" * 80)
         logger.info(f"Max number of segments: {max_n_segments}")
         logger.info(f'N batches per epoch: {len(loaders["train"])}')
-        logger.info(f"Trainer max steps: {trainer.max_steps}")
+        logger.info(f'Trainer max steps: {trainer.max_steps}')
         logger.info(f"Trainer max epochs: {trainer.max_epochs}")
 
         model._module.reset_memory()
