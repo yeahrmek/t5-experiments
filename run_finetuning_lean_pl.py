@@ -8,9 +8,9 @@ from typing import List, Optional, Tuple
 import torch
 from jsonargparse import ArgumentParser
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import WandbLogger
-from transformers import AutoTokenizer  # noqa: E402
+from transformers import AutoTokenizer, AutoConfig  # noqa: E402
 
 from lean_dataset import RMTDocsDataLoader, RMTDocsDataset, RMTProofsDataset
 from modeling_rmt.lightning import RMTModelPL
@@ -432,7 +432,10 @@ def get_model(cfg, tokenizer):
     if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"Using model class: {backbone_cls}")
 
-    backbone = backbone_cls.from_pretrained(cfg.backbone_cpt)
+    try:
+        backbone = backbone_cls.from_pretrained(cfg.backbone_cpt)
+    except OSError:
+        backbone = backbone_cls(config=AutoConfig.from_pretrained(cfg.backbone_cpt))
 
     # Load RMT model
     rmt_cls = get_cls_by_name(cfg.rmt_cls)
@@ -472,13 +475,13 @@ def get_trainer_callbacks(n_segments):
             + "-epoch={epoch:02d}-step={step}-loss={val/loss:.4f}",
         ),
         LearningRateMonitor(logging_interval="step"),
-        # EarlyStopping(
-        #     monitor="val/loss",
-        #     mode="min",
-        #     strict=False,
-        #     patience=3,
-        #     check_finite=False,
-        # ),
+        EarlyStopping(
+            monitor="val/loss",
+            mode="min",
+            strict=False,
+            patience=5,
+            check_finite=False,
+        ),
     ]
     return callbacks
 

@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 from pprint import pprint
 
-import pandas as pd
 import torch
 import tqdm
 from jsonargparse import ArgumentParser
@@ -68,7 +67,7 @@ def get_model(cfg, tokenizer):
     return pl_model
 
 
-def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size):
+def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size, num_workers):
     losses = []
 
     device = next(iter(model.parameters())).device
@@ -78,13 +77,15 @@ def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size):
         model._module.reset_memory()
         datasets["val"].set_max_n_segments(max_n_segments)
         loader = RMTDocsDataLoader(
-            datasets["val"], batch_size=batch_size, drop_last=True
+            datasets["val"], batch_size=batch_size, drop_last=True,
+            num_workers=num_workers
         )
 
         model._module._actual_max_n_segments = max_n_segments
         model._module.reset_memory()
         for batch in tqdm.tqdm(loader):
             batch = {k: v.to(device) for k, v in batch.items()}
+            labels = batch.pop('labels')
             out = model(batch)
 
             proofstep_idx = torch.where(
@@ -96,7 +97,7 @@ def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size):
             lm_logits = out.logits[:, cfg.num_mem_tokens : -cfg.num_mem_tokens]
 
             shift_logits = lm_logits[..., :-1, :].contiguous()
-            shift_labels = batch["labels"][..., 1:].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
             for i, j in zip(*proofstep_idx):
                 shift_labels[i.item()][: j.item() - 1] = -100
 
@@ -107,8 +108,6 @@ def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size):
 
             losses.append(loss.cpu())
 
-            {k: v.cpu() for k, v in batch.items()}
-
         losses = torch.stack(losses, dim=0)
 
     return losses
@@ -118,25 +117,16 @@ def main():
 
     parser = ArgumentParser()
     parser.add_argument('--run_id', type=str)
-    parser.add_argument('--n_segments_train', type=int)
+    parser.add_argument('--n_segments_train', type=int, nargs="+")
     parser.add_argument('--n_segments_val', type=int, nargs="+")
+    parser.add_argument('--batch_size', type=int, default=1)
+    parser.add_argument('--num_workers', type=int, default=1)
     parser.add_argument('--working_dir', type=str, default='.')
 
     args = parser.parse_args()
 
     tokenizer = None
     datasets = None
-
-    results = pd.DataFrame(
-        columns=[
-            "run_id",
-            "mem_tokens",
-            "train segments",
-            "val segments",
-            "perplexity",
-            "loss",
-        ]
-    )
 
     device = "cuda"
 
@@ -149,57 +139,47 @@ def main():
     ckpt_dir = str(Path(working_dir) / f"logs/rmt_proofs/{args.run_id}/checkpoints/")
     print(f"Run id: {args.run_id}")
 
-    n_segments_train = args.n_segments_train
+    n_segments_train_list = args.n_segments_train
     n_segments_val_list = args.n_segments_val
 
-    print(ckpt_dir)
-    best_ckpt = get_best_ckpt_path(ckpt_dir, n_segments=n_segments_train)
+    for n_segments_train in n_segments_train_list:
 
-    if best_ckpt is None:
-        return
+        print(f"\tn_segments_train: {n_segments_train}")
+        print(ckpt_dir)
+        best_ckpt = get_best_ckpt_path(ckpt_dir, n_segments=n_segments_train)
 
-    print(f"\tn_segments_train: {n_segments_train}")
+        if best_ckpt is None:
+            return
 
-    cfg = load_cfg(args, best_ckpt)
-    cfg.pretrained_ckpt = best_ckpt
+        cfg = load_cfg(args, best_ckpt)
+        cfg.pretrained_ckpt = best_ckpt
 
-    pprint(cfg.as_dict())
+        pprint(cfg.as_dict())
 
-    if tokenizer is None:
-        tokenizer = get_tokenizer(cfg)
-        datasets = get_datasets(cfg, tokenizer)
+        if tokenizer is None:
+            tokenizer = get_tokenizer(cfg)
+            datasets = get_datasets(cfg, tokenizer)
 
-    model = get_model(cfg, tokenizer)
-    model.to(device)
+        model = get_model(cfg, tokenizer)
+        model.to(device)
 
 
-    for n_segments_val in n_segments_val_list:
-        total_loss = eval_model(
-            cfg, model, tokenizer, datasets, max_n_segments=n_segments_val, batch_size=1
-        )
+        for n_segments_val in n_segments_val_list:
+            total_loss = eval_model(
+                cfg, model, tokenizer, datasets, max_n_segments=n_segments_val, batch_size=args.batch_size,
+                num_workers=args.num_workers
+            )
 
-        mean_loss = total_loss[n_segments_val - 1 :: n_segments_val].mean()
-        perplexity = torch.exp(mean_loss)
-        print(
-            f"\tn_segments_val: {n_segments_val}, loss: {mean_loss:.3f}, perplexity: {perplexity:.3f}"
-        )
+            mean_loss = total_loss[n_segments_val - 1 :: n_segments_val].mean()
+            perplexity = torch.exp(mean_loss)
+            print(
+                f"\ttrain_segments: {n_segments_train}, val_segments: {n_segments_val}, loss: {mean_loss:.3f}, perplexity: {perplexity:.3f}"
+            )
 
-        cur_res = [
-            args.run_id,
-            cfg.num_mem_tokens,
-            n_segments_train,
-            n_segments_val,
-            perplexity.item(),
-            mean_loss.item(),
-        ]
-        results.loc[len(results.index)] = cur_res
-        torch.save(
-            total_loss,
-            str(Path(working_dir) / f"logs/proof_losses_{args.run_id}_{n_segments_train}_{n_segments_val}.ckpt")
-        )
-
-        print()
-        results.to_csv(str(Path(working_dir) / f"logs/proof_res_{args.run_id}.csv"))
+            torch.save(
+                total_loss,
+                str(Path(working_dir) / f"logs/proof_losses_{args.run_id}_{n_segments_train}_{n_segments_val}.ckpt")
+            )
 
 
 if __name__ == "__main__":

@@ -4,14 +4,14 @@ wandb_project=rmt_proofs  # or lean
 id=null
 logger_resume=false
 resume_training=false
-pretrained_ckpt=null
+pretrained_ckpt="./logs/rmt_proofs/uwbr70yj/checkpoints/last-v1.ckpt"
 # pretrained_ckpt="./logs/rmt_lean/6rqkrhxp/checkpoints/last.ckpt"
 # pretrained_ckpt="./logs/rmt_lean/7xxtf5sm/checkpoints/n_segments=4-epoch=00-step=156-loss=0.8870.ckpt"
 # pretrained_ckpt="./logs/rmt_lean/6rqkrhxp/checkpoints/"
 
 num_mem_tokens=10
 # curriculum="[1,1,1,2,1,3,1,4,1,5]"
-curriculum="[2,1,2,2,1,3,1,4,1,5]"
+curriculum="[3,2,3,3,3,4,3,5]"
 
 lr=1e-5
 
@@ -34,10 +34,10 @@ python run_finetuning_lean_pl.py \
   --num_mem_tokens $num_mem_tokens \
   --max_n_segments 1 \
   --curriculum=$curriculum \
-  --batch_size 2 \
+  --batch_size 1 \
   --optimizer.lr $lr \
   --lr_scheduler.warmup_epochs 1000 \
-  --trainer.accumulate_grad_batches 16 \
+  --trainer.accumulate_grad_batches 32 \
   --trainer.limit_val_batches null \
   --trainer.val_check_interval 5000 \
   --trainer.precision bf16 \

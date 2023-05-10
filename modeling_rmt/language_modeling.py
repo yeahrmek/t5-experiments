@@ -86,7 +86,7 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         seg_kwargs["inputs_embeds"][:, self.read_memory_position] = memory
         # seg_kwargs['inputs_embeds'][:, self.write_memory_position] = self.memory
 
-        labels = seg_kwargs.pop("labels")
+        labels = seg_kwargs.pop("labels", None)
         out = self.model(**seg_kwargs)
 
         new_memory = out.hidden_states[-1][:, self.write_memory_position]
@@ -94,15 +94,16 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         self.trim_memory_states()
 
         ### Calculate loss excluding memory
-        lm_logits = out.logits[:, self.num_mem_tokens : -self.num_mem_tokens]
-        # Shift so that tokens < n predict n
-        shift_logits = lm_logits[..., :-1, :].contiguous()
-        shift_labels = labels[..., 1:].contiguous()
-        # Flatten the tokens
-        loss_fct = CrossEntropyLoss()
-        out["loss"] = loss_fct(
-            shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
-        )
+        if labels is not None:
+            lm_logits = out.logits[:, self.num_mem_tokens : -self.num_mem_tokens]
+            # Shift so that tokens < n predict n
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            # Flatten the tokens
+            loss_fct = CrossEntropyLoss()
+            out["loss"] = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+            )
 
         return out
 
