@@ -45,8 +45,8 @@ python run_finetuning_lean_pl.py \
   --trainer.accumulate_grad_batches $accumulate_grad_batches \
   --trainer.limit_val_batches null \
   --trainer.val_check_interval 5000 \
-  --trainer.precision bf16 \
+  --trainer.precision bf16-mixed \
   --trainer.num_sanity_val_steps 1 \
   --trainer.accelerator auto \
   --trainer.devices auto \
-  --trainer.strategy deepspeed_stage_2_offload
+  --trainer.strategy deepspeed_stage_2

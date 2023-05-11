@@ -485,6 +485,7 @@ def get_rmt_model(cfg, tokenizer):
 def get_base_model(cfg, tokenizer):
     backbone = _get_backbone_model(cfg)
     pl_model = _get_pl_model(cfg, backbone)
+    # pl_model = torch.compile(pl_model)
     return pl_model
 
 
