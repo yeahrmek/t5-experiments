@@ -22,6 +22,13 @@ def get_best_ckpt_path(ckpt_dir, n_segments):
         if loss < best_loss:
             best_loss = loss
             best_ckpt = path
+
+    if not best_ckpt:
+        if n_segments == 1:
+            best_ckpt = Path(ckpt_dir) / 'last.ckpt'
+        else:
+            best_ckpt = Path(ckpt_dir) / f'last-v{n_segments - 1}.ckpt'
+
     return best_ckpt
 
 
@@ -35,7 +42,7 @@ def load_cfg(args, ckpt_path):
     return cfg
 
 
-def get_model(cfg, tokenizer):
+def get_rmt_model(cfg, tokenizer):
     rmt_config = {
         "num_mem_tokens": cfg.num_mem_tokens,
         "max_n_segments": cfg.max_n_segments,
@@ -83,33 +90,43 @@ def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size, num_
 
         model._module._actual_max_n_segments = max_n_segments
         model._module.reset_memory()
-        for batch in tqdm.tqdm(loader):
-            batch = {k: v.to(device) for k, v in batch.items()}
-            labels = batch.pop('labels')
-            out = model(batch)
+        loss_sum = 0
+        n_elements = 0
+        with tqdm.tqdm(loader) as pbar:
+            for batch in pbar:
+                batch = {k: v.to(device) for k, v in batch.items()}
+                labels = batch.pop('labels')
+                out = model(batch)
 
-            proofstep_idx = torch.where(
-                batch["input_ids"] == tokenizer.vocab["[PROOFSTEP]"]
-            )
+                proofstep_idx = torch.where(
+                    batch["input_ids"] == tokenizer.vocab["[PROOFSTEP]"]
+                )
 
-            if proofs_only and not len(proofstep_idx[0]):
-                continue
+                if proofs_only and not len(proofstep_idx[0]):
+                    continue
 
-            lm_logits = out.logits[:, cfg.num_mem_tokens : -cfg.num_mem_tokens]
+                lm_logits = out.logits[:, cfg.num_mem_tokens : -cfg.num_mem_tokens]
 
-            shift_logits = lm_logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
+                shift_logits = lm_logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
 
-            if proofs_only:
-                for i, j in zip(*proofstep_idx):
-                    shift_labels[i.item()][: j.item() - 1] = -100
+                if proofs_only:
+                    for i, j in zip(*proofstep_idx):
+                        shift_labels[i.item()][: j.item() - 1] = -100
 
-            loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
-            loss = loss_fct(
-                shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
-            )
+                loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
+                loss = loss_fct(
+                    shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+                )
 
-            losses.append(loss.cpu())
+                losses.append(loss.cpu())
+
+                loss_sum += loss.sum()
+                n_elements += len(loss)
+                pbar.set_postfix(loss=loss_sum / n_elements)
+                pbar.update(1)
+
+
 
         losses = torch.stack(losses, dim=0)
 
@@ -167,7 +184,7 @@ def main():
             tokenizer = get_tokenizer(cfg)
             datasets = get_datasets(cfg, tokenizer)
 
-        model = get_model(cfg, tokenizer)
+        model = get_rmt_model(cfg, tokenizer)
         model.to(device)
 
 

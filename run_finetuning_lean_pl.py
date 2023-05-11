@@ -40,6 +40,7 @@ def get_cls_by_name(name: str) -> type:
 def setup_parser():
     parser = ArgumentParser()
     parser.add_argument("--task_name", type=str, help="Task name: 'lm' or 'proofs'")
+    parser.add_argument("--model_type", type=str, default='rmt', help='rmt or base (no reccurency) model')
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
 
@@ -413,37 +414,23 @@ def get_dataloaders(cfg, datasets):
     return loaders
 
 
-def get_model(cfg, tokenizer):
-    rmt_config = {
-        "num_mem_tokens": cfg.num_mem_tokens,
-        "max_n_segments": cfg.max_n_segments,
-        "input_size": cfg.input_size,
-        "bptt_depth": cfg.bptt_depth,
-        "sum_loss": cfg.sum_loss,
-        "tokenizer": tokenizer,
-        "memory_forward_func": cfg.memory_forward_func,
-        "memory_layers": cfg.memory_layers,
-        "share_memory_layers": cfg.share_memory_layers,
-        "reconstruction_loss_coef": cfg.reconstruction_loss_coef,
-    }
-
+def _get_backbone_model(cfg):
     # Load backbone model
     backbone_cls = get_cls_by_name(cfg.backbone_cls)
     if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"Using model class: {backbone_cls}")
+        logger.info(f"Loading model from {cfg.backbone_cpt}")
 
     try:
         backbone = backbone_cls.from_pretrained(cfg.backbone_cpt)
+        logger.info(f"Model loaded from {cfg.backbone_cpt}")
     except OSError:
         backbone = backbone_cls(config=AutoConfig.from_pretrained(cfg.backbone_cpt))
 
-    # Load RMT model
-    rmt_cls = get_cls_by_name(cfg.rmt_cls)
-    if os.environ.get("LOCAL_RANK", 0) == 0:
-        logger.info(f"Wrapping in: {rmt_cls}")
+    return backbone
 
-    rmt_model = rmt_cls(backbone, **rmt_config)
 
+def _get_pl_model(cfg, rmt_model):
     if cfg.pretrained_ckpt and not cfg.resume_training:
         logger.info(f"Loading checkpoint: {cfg.pretrained_ckpt}")
         pl_model = RMTModelPL.load_from_checkpoint(
@@ -465,7 +452,39 @@ def get_model(cfg, tokenizer):
     #     print("Model compiled")
     # except:
     #     pass
+    return pl_model
 
+
+def get_rmt_model(cfg, tokenizer):
+    rmt_config = {
+        "num_mem_tokens": cfg.num_mem_tokens,
+        "max_n_segments": cfg.max_n_segments,
+        "input_size": cfg.input_size,
+        "bptt_depth": cfg.bptt_depth,
+        "sum_loss": cfg.sum_loss,
+        "tokenizer": tokenizer,
+        "memory_forward_func": cfg.memory_forward_func,
+        "memory_layers": cfg.memory_layers,
+        "share_memory_layers": cfg.share_memory_layers,
+        "reconstruction_loss_coef": cfg.reconstruction_loss_coef,
+    }
+
+    backbone = _get_backbone_model(cfg)
+
+    # Load RMT model
+    rmt_cls = get_cls_by_name(cfg.rmt_cls)
+    if os.environ.get("LOCAL_RANK", 0) == 0:
+        logger.info(f"Wrapping in: {rmt_cls}")
+
+    rmt_model = rmt_cls(backbone, **rmt_config)
+    pl_model = _get_pl_model(cfg, rmt_model)
+
+    return pl_model
+
+
+def get_base_model(cfg, tokenizer):
+    backbone = _get_backbone_model(cfg)
+    pl_model = _get_pl_model(cfg, backbone)
     return pl_model
 
 
@@ -503,7 +522,10 @@ if __name__ == "__main__":
     tokenizer = get_tokenizer(cfg)
     wandb_logger = get_logger(cfg)
 
-    model = get_model(cfg, tokenizer)
+    if cfg.model_type == 'rmt':
+        model = get_rmt_model(cfg, tokenizer)
+    elif cfg.model_type == 'base':
+        model = get_base_model(cfg, tokenizer)
 
     datasets = get_datasets(cfg, tokenizer)
 
@@ -553,7 +575,8 @@ if __name__ == "__main__":
             n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
         )
         model.cfg.lr_scheduler.T_max = cfg.trainer.max_steps
-        model._module.set_max_n_segments(max_n_segments)
+        if hasattr(model._module, 'set_max_n_segments'):
+            model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"
 
         trainer_options = cfg.trainer.as_dict()
@@ -567,7 +590,8 @@ if __name__ == "__main__":
         logger.info(f"Trainer max steps: {trainer.max_steps}")
         logger.info(f"Trainer max epochs: {trainer.max_epochs}")
 
-        model._module.reset_memory()
+        if hasattr(model._module, 'reset_memory'):
+            model._module.reset_memory()
 
         if cfg.validate_only:
             trainer.validate(model, loaders["val"])
