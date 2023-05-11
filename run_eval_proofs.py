@@ -67,12 +67,12 @@ def get_model(cfg, tokenizer):
     return pl_model
 
 
-def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size, num_workers):
+def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size, num_workers, proofs_only=True):
     losses = []
 
     device = next(iter(model.parameters())).device
 
-    with torch.no_grad():
+    with torch.inference_mode(), torch.autocast('cuda', dtype=torch.bfloat16):
         model.eval()
         model._module.reset_memory()
         datasets["val"].set_max_n_segments(max_n_segments)
@@ -91,15 +91,18 @@ def eval_model(cfg, model, tokenizer, datasets, max_n_segments, batch_size, num_
             proofstep_idx = torch.where(
                 batch["input_ids"] == tokenizer.vocab["[PROOFSTEP]"]
             )
-            if not len(proofstep_idx[0]):
+
+            if proofs_only and not len(proofstep_idx[0]):
                 continue
 
             lm_logits = out.logits[:, cfg.num_mem_tokens : -cfg.num_mem_tokens]
 
             shift_logits = lm_logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            for i, j in zip(*proofstep_idx):
-                shift_labels[i.item()][: j.item() - 1] = -100
+
+            if proofs_only:
+                for i, j in zip(*proofstep_idx):
+                    shift_labels[i.item()][: j.item() - 1] = -100
 
             loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
             loss = loss_fct(
@@ -119,9 +122,11 @@ def main():
     parser.add_argument('--run_id', type=str)
     parser.add_argument('--n_segments_train', type=int, nargs="+")
     parser.add_argument('--n_segments_val', type=int, nargs="+")
+    parser.add_argument('--proofs_only', type=bool, default=True)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--num_workers', type=int, default=1)
     parser.add_argument('--working_dir', type=str, default='.')
+
 
     args = parser.parse_args()
 
@@ -142,6 +147,8 @@ def main():
     n_segments_train_list = args.n_segments_train
     n_segments_val_list = args.n_segments_val
 
+    save_filename_prefix = "proof_" if args.proofs_only else ""
+    print(save_filename_prefix)
     for n_segments_train in n_segments_train_list:
 
         print(f"\tn_segments_train: {n_segments_train}")
@@ -167,18 +174,25 @@ def main():
         for n_segments_val in n_segments_val_list:
             total_loss = eval_model(
                 cfg, model, tokenizer, datasets, max_n_segments=n_segments_val, batch_size=args.batch_size,
-                num_workers=args.num_workers
+                num_workers=args.num_workers, proofs_only=args.proofs_only
             )
 
-            mean_loss = total_loss[n_segments_val - 1 :: n_segments_val].mean()
-            perplexity = torch.exp(mean_loss)
+            mean_loss = total_loss.float().mean(dim=1)
+            perplexity = torch.exp(total_loss).mean()
             print(
-                f"\ttrain_segments: {n_segments_train}, val_segments: {n_segments_val}, loss: {mean_loss:.3f}, perplexity: {perplexity:.3f}"
+                f"\ttrain_segments: {n_segments_train}, val_segments: {n_segments_val}, loss: {mean_loss.mean():.3f}, perplexity: {perplexity:.3f}"
             )
 
             torch.save(
                 total_loss,
-                str(Path(working_dir) / f"logs/proof_losses_{args.run_id}_{n_segments_train}_{n_segments_val}.ckpt")
+                str(
+                    Path(working_dir) / (
+                        f"logs/{save_filename_prefix}losses_"
+                        f"{args.run_id}_"
+                        f"{n_segments_train}_"
+                        f"{n_segments_val}.ckpt"
+                    )
+                )
             )
 
 
