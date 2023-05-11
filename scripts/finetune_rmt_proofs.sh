@@ -34,10 +34,10 @@ python run_finetuning_lean_pl.py \
   --num_mem_tokens $num_mem_tokens \
   --max_n_segments 1 \
   --curriculum=$curriculum \
-  --batch_size 1 \
+  --batch_size 2 \
   --optimizer.lr $lr \
   --lr_scheduler.warmup_epochs 1000 \
-  --trainer.accumulate_grad_batches 32 \
+  --trainer.accumulate_grad_batches 16 \
   --trainer.limit_val_batches null \
   --trainer.val_check_interval 5000 \
   --trainer.precision bf16 \

@@ -460,6 +460,12 @@ def get_model(cfg, tokenizer):
         if os.environ.get("LOCAL_RANK", 0) == 0:
             logger.info(f"Frozen moodel weights except embeddings")
 
+    # try:
+    #     pl_model._module.model = torch.compile(pl_model._module.model)
+    #     print("Model compiled")
+    # except:
+    #     pass
+
     return pl_model
 
 
