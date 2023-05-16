@@ -468,7 +468,7 @@ def get_rmt_model(cfg, tokenizer):
         "memory_layers": cfg.memory_layers,
         "share_memory_layers": cfg.share_memory_layers,
         "reconstruction_loss_coef": cfg.reconstruction_loss_coef,
-        "proof_loss_only": cfg.proof_loss_only,
+        "proof_loss_only": cfg.proof_loss_only if hasattr(cfg, 'proof_loss_only') else False,
         "proofstep_token_id": tokenizer.vocab["[PROOFSTEP]"],
     }
 
