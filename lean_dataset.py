@@ -177,12 +177,17 @@ class RMTProofsDataset:
         tokenizer: PreTrainedTokenizer,
         max_n_segments: int = -1,
         segment_length: int = 0,
+        padding_side: str = 'right',
+        add_lemma_token: bool = False
     ):
+        assert padding_side in ['left', 'right']
         self.data_dir = str(Path(data_dir).resolve())
         self.lemmas_path = str(Path(lemmas_path).resolve())
         self.tokenizer = tokenizer
         self._max_n_segments = max_n_segments
         self.segment_length = segment_length
+        self.padding_side = padding_side
+        self.add_lemma_token = add_lemma_token
 
         self.dataset = Dataset.from_parquet(
             [str(x) for x in Path(data_dir).glob("*.parquet")]
@@ -269,7 +274,10 @@ class RMTProofsDataset:
         i = 0
         sequence_length = self.segment_length * self._max_n_segments
         while total_length < sequence_length:
-            args.append(self.tokenizer(rand_lemmas[i])["input_ids"])
+            if self.add_lemma_token:
+                args.append(self.tokenizer('<lemma> ' + rand_lemmas[i])["input_ids"])
+            else:
+                args.append(self.tokenizer(rand_lemmas[i])["input_ids"])
             i += 1
             total_length += len(args[-1])
 
@@ -293,9 +301,15 @@ class RMTProofsDataset:
         total_length = self.segment_length * n_segments
 
         input_ids = torch.LongTensor(total_length).fill_(self.tokenizer.pad_token_id)
-        input_ids[:len(input_ids_list)] = input_ids_list
-        attention_mask = torch.ones_like(input_ids, dtype=torch.long)
-        attention_mask[len(input_ids_list):] = 0
+
+        if self.padding_side == 'right':
+            input_ids[:len(input_ids_list)] = input_ids_list
+            attention_mask = torch.ones_like(input_ids, dtype=torch.long)
+            attention_mask[len(input_ids_list):] = 0
+        elif self.padding_side == 'left':
+            input_ids[-len(input_ids_list):] = input_ids_list
+            attention_mask = torch.zeros_like(input_ids, dtype=torch.long)
+            attention_mask[-len(input_ids_list):] = 1
 
         input_ids = input_ids.chunk(n_segments)
         attention_mask = attention_mask.chunk(n_segments)

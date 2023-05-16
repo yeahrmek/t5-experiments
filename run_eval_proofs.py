@@ -82,10 +82,6 @@ def eval_model(
                 labels = batch.pop("labels")
                 out = model(batch)
 
-                proofstep_idx = torch.where(
-                    batch["input_ids"] == tokenizer.vocab["[PROOFSTEP]"]
-                )
-
                 lm_logits = out.logits
                 if not hasattr(cfg, "model_type") or cfg.model_type == "rmt":
                     lm_logits = out.logits[:, cfg.num_mem_tokens : -cfg.num_mem_tokens]
@@ -96,6 +92,15 @@ def eval_model(
                 loss_fct = torch.nn.CrossEntropyLoss(reduction="none")
                 loss = loss_fct(
                     shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
+                )
+
+                attn_mask = batch.get('attention_mask', None)
+                if attn_mask is not None:
+                    batch = {k: v[0][attn_mask[0] == 1].reshape(1, -1) for k, v in batch.items()}
+                    loss = loss[attn_mask[0][1:] == 1]
+
+                proofstep_idx = torch.where(
+                    batch["input_ids"] == tokenizer.vocab["[PROOFSTEP]"]
                 )
 
                 losses.append(loss.cpu())
@@ -113,7 +118,7 @@ def eval_model(
                 pbar.set_postfix(loss=loss_sum / n_elements)
                 pbar.update(1)
 
-        losses = torch.stack(losses, dim=0)
+        # losses = torch.stack(losses, dim=0)
 
     return losses, proofstep_indices, pad_start_indices
 
@@ -123,6 +128,8 @@ def main():
     parser.add_argument("--run_id", type=str, nargs="+")
     parser.add_argument("--n_segments_train", type=int, nargs="+")
     parser.add_argument("--n_segments_val", type=int, nargs="+")
+    parser.add_argument("--padding_side", type=str, default="right")
+    parser.add_argument("--add_lemma_token", type=bool, default=False)
     parser.add_argument("--n_runs", type=int, default=1)
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=1)
@@ -133,7 +140,8 @@ def main():
     tokenizer = None
     datasets = None
 
-    device = "cuda"
+    # device = "cuda"
+    device = 'cpu'
 
     working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(working_dir)
@@ -164,6 +172,9 @@ def main():
             if tokenizer is None:
                 tokenizer = get_tokenizer(cfg)
                 datasets = get_datasets(cfg, tokenizer)
+                for key, ds in datasets.items():
+                    ds.padding_side = args.padding_side
+                    ds.add_lemma_token = args.add_lemma_token
 
             if not hasattr(cfg, "model_type") or cfg.model_type == "rmt":
                 model = get_rmt_model(cfg, tokenizer)
@@ -171,6 +182,8 @@ def main():
                 model = get_base_model(cfg, tokenizer)
 
             model.to(device)
+            if hasattr(model._module, 'rmt_config'):
+                model._module.rmt_config['padding_side'] = args.padding_side
 
             for n_segments_val in n_segments_val_list:
                 for run in range(args.n_runs):
@@ -187,12 +200,11 @@ def main():
                         num_workers=args.num_workers,
                     )
 
-                    mean_loss = total_loss.float().mean(dim=1)
-                    perplexity = torch.exp(total_loss).mean()
                     print(
-                        f"\ttrain_segments: {n_segments_train}, val_segments: {n_segments_val}, loss: {mean_loss.mean():.3f}, perplexity: {perplexity:.3f}"
+                        f"\ttrain_segments: {n_segments_train}, val_segments: {n_segments_val}"#, loss: {mean_loss.mean():.3f}, perplexity: {perplexity:.3f}"
                     )
 
+                    suffix = 'lemmatok' if args.add_lemma_token else 'nolemmatok'
                     torch.save(
                         {
                             "loss": total_loss,
@@ -202,10 +214,11 @@ def main():
                         str(
                             Path(working_dir)
                             / (
-                                f"logs/{save_filename_prefix}losses_"
+                                f"logs/validation/{save_filename_prefix}losses_"
                                 f"{run_id}_"
+                                f"{args.padding_side}_"
                                 f"{n_segments_train}_"
-                                f"{n_segments_val}_{seed}.ckpt"
+                                f"{n_segments_val}_{seed}{suffix}.ckpt"
                             )
                         ),
                     )

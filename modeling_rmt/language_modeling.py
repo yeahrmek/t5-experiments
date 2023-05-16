@@ -113,8 +113,12 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         tensor = torch.cat(input_elements)
 
         pad_size = segment_size - tensor.shape[0]
-        if pad_size > 0:
+        pad_side = self.rmt_config.get('padding_side', 'right')
+        if pad_size > 0 and pad_side == 'right':
             tensor = F.pad(tensor, (0, pad_size), value=self.pad_token_id)
+        else:
+            tensor = F.pad(tensor, (pad_size, 0), value=self.pad_token_id)
+
         return tensor
 
     def train(self, *args, **kwargs):
