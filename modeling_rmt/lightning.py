@@ -7,6 +7,7 @@ import torch
 from pytorch_lightning import LightningModule
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim.optimizer import Optimizer
+from transformers import GPTNeoForCausalLM
 
 ALL_LAYERNORM_LAYERS = [torch.nn.LayerNorm]
 
@@ -161,6 +162,8 @@ class RMTModelPL(LightningModule):
             )
 
     def forward(self, x, **kwargs):
+        if isinstance(self._module, GPTNeoForCausalLM):
+            return self._module(**{k: v for k, v in x.items() if k != 'batch_idx'})
         return self._module(**x)
 
     def training_step(self, batch, batch_idx):

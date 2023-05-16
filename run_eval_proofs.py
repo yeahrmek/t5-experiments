@@ -58,6 +58,7 @@ def eval_model(
     losses = []
     proofstep_indices = []
     pad_start_indices = []
+    batch_indices = []
 
     device = next(iter(model.parameters())).device
 
@@ -67,7 +68,6 @@ def eval_model(
         loader = RMTDocsDataLoader(
             datasets["val"],
             batch_size=batch_size,
-            drop_last=True,
             num_workers=num_workers,
         )
 
@@ -78,7 +78,7 @@ def eval_model(
         n_elements = 0
         with tqdm.tqdm(loader) as pbar:
             for batch in pbar:
-                batch = {k: v.to(device) for k, v in batch.items()}
+                batch = {k: v.to(device) if k != 'batch_idx' else v for k, v in batch.items()}
                 labels = batch.pop("labels")
                 out = model(batch)
 
@@ -96,7 +96,7 @@ def eval_model(
 
                 attn_mask = batch.get('attention_mask', None)
                 if attn_mask is not None:
-                    batch = {k: v[0][attn_mask[0] == 1].reshape(1, -1) for k, v in batch.items()}
+                    batch = {k: v[0][attn_mask[0] == 1].reshape(1, -1) if k != 'batch_idx' else v for k, v in batch.items()}
                     loss = loss[attn_mask[0][1:] == 1]
 
                 proofstep_idx = torch.where(
@@ -112,6 +112,7 @@ def eval_model(
 
                 proofstep_indices.append(proofstep_idx)
                 pad_start_indices.append(batch["attention_mask"].sum().item())
+                batch_indices.append(batch['batch_idx'])
 
                 loss_sum += loss.sum()
                 n_elements += len(loss)
@@ -120,7 +121,7 @@ def eval_model(
 
         # losses = torch.stack(losses, dim=0)
 
-    return losses, proofstep_indices, pad_start_indices
+    return losses, proofstep_indices, pad_start_indices, batch_indices
 
 
 def main():
@@ -140,8 +141,7 @@ def main():
     tokenizer = None
     datasets = None
 
-    # device = "cuda"
-    device = 'cpu'
+    device = "cuda"
 
     working_dir = str(Path(args.working_dir).expanduser().absolute())
     os.chdir(working_dir)
@@ -180,6 +180,8 @@ def main():
                 model = get_rmt_model(cfg, tokenizer)
             elif cfg.model_type == "base":
                 model = get_base_model(cfg, tokenizer)
+                model._module.resize_token_embeddings(50304)
+
 
             model.to(device)
             if hasattr(model._module, 'rmt_config'):
@@ -190,7 +192,7 @@ def main():
                     seed = random.randint(min_seed_value, max_seed_value)  # noqa: S311
                     seed = seed_everything(seed)
                     print(f"Using random seed: {seed}")
-                    total_loss, proofstep_idx, pad_start_idx = eval_model(
+                    total_loss, proofstep_idx, mask_sum, batch_idx = eval_model(
                         cfg,
                         model,
                         tokenizer,
@@ -209,12 +211,13 @@ def main():
                         {
                             "loss": total_loss,
                             "proofstep_idx": proofstep_idx,
-                            "pad_start_idx": pad_start_idx,
+                            "mask_sum": mask_sum,
+                            'batch_idx': batch_idx
                         },
                         str(
                             Path(working_dir)
                             / (
-                                f"logs/validation/{save_filename_prefix}losses_"
+                                f"logs/validation_correct/{save_filename_prefix}losses_"
                                 f"{run_id}_"
                                 f"{args.padding_side}_"
                                 f"{n_segments_train}_"

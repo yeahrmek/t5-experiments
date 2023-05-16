@@ -41,6 +41,7 @@ def setup_parser():
     parser = ArgumentParser()
     parser.add_argument("--task_name", type=str, help="Task name: 'lm' or 'proofs'")
     parser.add_argument("--model_type", type=str, default='rmt', help='rmt or base (no reccurency) model')
+    parser.add_argument("--proof_loss_only", type=bool, default=False)
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
 
@@ -467,6 +468,8 @@ def get_rmt_model(cfg, tokenizer):
         "memory_layers": cfg.memory_layers,
         "share_memory_layers": cfg.share_memory_layers,
         "reconstruction_loss_coef": cfg.reconstruction_loss_coef,
+        "proof_loss_only": cfg.proof_loss_only,
+        "proofstep_token_id": tokenizer.vocab["[PROOFSTEP]"],
     }
 
     backbone = _get_backbone_model(cfg)
@@ -483,6 +486,8 @@ def get_rmt_model(cfg, tokenizer):
 
 
 def get_base_model(cfg, tokenizer):
+    if cfg.proof_loss_only:
+        raise NotImplementedError
     backbone = _get_backbone_model(cfg)
     pl_model = _get_pl_model(cfg, backbone)
     # pl_model = torch.compile(pl_model)

@@ -319,6 +319,7 @@ class RMTProofsDataset:
             labels = ids.clone()
             if self.tokenizer.pad_token_id is not None:
                 labels[labels == self.tokenizer.pad_token_id] = -100
+
             output.append(
                 {
                     "input_ids": ids,
@@ -355,5 +356,6 @@ class RMTDocsDataLoader(DataLoader):
 
     def __iter__(self):
         for batch in super().__iter__():
-            for segment in batch:
+            for i, segment in enumerate(batch):
+                segment['batch_idx'] = i
                 yield segment

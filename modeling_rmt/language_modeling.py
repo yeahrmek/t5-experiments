@@ -44,6 +44,7 @@ class RMTDecoderForCausalLM(RMTBaseModel):
 
     def forward(
         self,
+        batch_idx,
         input_ids,
         attention_mask=None,
         token_type_ids=None,
@@ -69,13 +70,11 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         if (
             not hasattr(self, "memory_states")
             or self.memory_states is None
-            or self._forward_counter == self._actual_max_n_segments
+            or batch_idx == 0
         ):
             init_memory = self.set_memory(input_ids.shape)
             self.memory_states = [(None, init_memory)]
             self._n_resets += 1
-
-        self._forward_counter += 1
 
         memory = self.memory_states[-1][1].detach()
         memory.requires_grad = True
@@ -95,6 +94,20 @@ class RMTDecoderForCausalLM(RMTBaseModel):
 
         ### Calculate loss excluding memory
         if labels is not None:
+
+            if self.rmt_config.get('proof_loss_only', None):
+                proofstep_idx = torch.where(
+                    labels == self.rmt_config['proofstep_token_id']
+                )
+                if len(proofstep_idx[0]) > 0:
+                    labels[:proofstep_idx[0]] = -100
+                    assert len(proofstep_idx[0]) == len(labels)
+                else:
+                    out["loss"] = torch.zeros(1, dtype=out.logits.dtype,
+                                              device=out.logits.device,
+                                              requires_grad=True)
+                    return out
+
             lm_logits = out.logits[:, self.num_mem_tokens : -self.num_mem_tokens]
             # Shift so that tokens < n predict n
             shift_logits = lm_logits[..., :-1, :].contiguous()
