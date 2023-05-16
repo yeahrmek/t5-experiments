@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Ea
 from pytorch_lightning.loggers import WandbLogger
 from transformers import AutoTokenizer, AutoConfig  # noqa: E402
 
-from lean_dataset import RMTDocsDataLoader, RMTDocsDataset, RMTProofsDataset
+from lean_dataset import RMTDocsDataLoader, RMTDocsAllAtOnceDataLoader, RMTDocsDataset, RMTProofsDataset
 from modeling_rmt.lightning import RMTModelPL
 
 logging.basicConfig(
@@ -391,6 +391,10 @@ def get_datasets(cfg, tokenizer):
 
 
 def get_dataloaders(cfg, datasets):
+    if cfg.proof_loss_only:
+        loader_cls = RMTDocsAllAtOnceDataLoader
+    else:
+        loader_cls = RMTDocsDataLoader
     loader_kwargs = {
         "pin_memory": True,
         "num_workers": cfg.data_n_workers,
@@ -401,13 +405,13 @@ def get_dataloaders(cfg, datasets):
 
     loaders = {}
 
-    loaders["train"] = RMTDocsDataLoader(
+    loaders["train"] = loader_cls(
         datasets["train"],
         shuffle=True,
         **loader_kwargs,
     )
 
-    loaders["val"] = RMTDocsDataLoader(
+    loaders["val"] = loader_cls(
         datasets["val"],
         **loader_kwargs,
     )
@@ -437,6 +441,10 @@ def _get_pl_model(cfg, rmt_model):
         pl_model = RMTModelPL.load_from_checkpoint(
             cfg.pretrained_ckpt, rmt_model=rmt_model
         )
+
+        # TODO: update config properly
+        pl_model.cfg.proof_loss_only = cfg.proof_loss_only
+
         pl_model.save_hyperparameters(ignore=["rm_model"])
     else:
         pl_model = RMTModelPL(rmt_model, cfg)

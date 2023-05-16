@@ -100,7 +100,8 @@ class RMTDecoderForCausalLM(RMTBaseModel):
                     labels == self.rmt_config['proofstep_token_id']
                 )
                 if len(proofstep_idx[0]) > 0:
-                    labels[:proofstep_idx[0]] = -100
+                    for i, j in zip(*proofstep_idx):
+                        labels[i, :j] = -100
                     assert len(proofstep_idx[0]) == len(labels)
                 else:
                     out["loss"] = torch.zeros(1, dtype=out.logits.dtype,

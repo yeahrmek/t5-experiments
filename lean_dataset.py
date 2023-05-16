@@ -359,3 +359,13 @@ class RMTDocsDataLoader(DataLoader):
             for i, segment in enumerate(batch):
                 segment['batch_idx'] = i
                 yield segment
+
+
+class RMTDocsAllAtOnceDataLoader(DataLoader):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.collate_fn = collate_docs_fn
+
+    def __len__(self):
+        return super().__len__() * self.dataset._max_n_segments
+

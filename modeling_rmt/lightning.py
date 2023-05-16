@@ -167,25 +167,45 @@ class RMTModelPL(LightningModule):
         return self._module(**x)
 
     def training_step(self, batch, batch_idx):
-        out = self(batch)
+        if self.cfg.proof_loss_only:
+            for i, segment in enumerate(batch):
+                segment['batch_idx'] = i
+                if i < len(batch) - 1:
+                    segment.pop('labels')
+                out = self(segment)
+            batch_size = segment['input_ids'].shape[0]
+        else:
+            out = self(batch)
+            batch_size = batch['input_ids'].shape[0]
+
         self._log(
             "train",
             {
                 "loss": out['loss'],
                 "perplexity": torch.exp(out["loss"].detach())
             },
-            batch_size=batch['input_ids'].shape[0]
+            batch_size=batch_size
         )
         return out['loss']
 
     def validation_step(self, batch, batch_idx):
-        out = self(batch)
+        if self.cfg.proof_loss_only:
+            for i, segment in enumerate(batch):
+                segment['batch_idx'] = i
+                if i < len(batch) - 1:
+                    segment.pop('labels')
+                out = self(segment)
+            batch_size = segment['input_ids'].shape[0]
+        else:
+            out = self(batch)
+            batch_size = batch['input_ids'].shape[0]
+
         metrics = {
             "loss": out["loss"],
             "perplexity": torch.exp(out["loss"])
         }
         self._log("val", metrics, on_step=False, on_epoch=True, sync_dist=True,
-                  batch_size=batch['input_ids'].shape[0])
+                  batch_size=batch_size)
 
     def configure_optimizers(self):
 
