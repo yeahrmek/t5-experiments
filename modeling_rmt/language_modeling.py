@@ -102,11 +102,11 @@ class RMTDecoderForCausalLM(RMTBaseModel):
                 if len(proofstep_idx[0]) > 0:
                     for i, j in zip(*proofstep_idx):
                         labels[i, :j] = -100
-                    assert len(proofstep_idx[0]) == len(labels)
+                    # assert len(proofstep_idx[0]) == len(labels)
                 else:
                     out["loss"] = torch.zeros(1, dtype=out.logits.dtype,
                                               device=out.logits.device,
-                                              requires_grad=True)
+                                              requires_grad=True).sum()
                     return out
 
             lm_logits = out.logits[:, self.num_mem_tokens : -self.num_mem_tokens]

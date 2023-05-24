@@ -178,7 +178,6 @@ class RMTProofsDataset:
         max_n_segments: int = -1,
         segment_length: int = 0,
         padding_side: str = 'right',
-        add_lemma_token: bool = False
     ):
         assert padding_side in ['left', 'right']
         self.data_dir = str(Path(data_dir).resolve())
@@ -187,7 +186,6 @@ class RMTProofsDataset:
         self._max_n_segments = max_n_segments
         self.segment_length = segment_length
         self.padding_side = padding_side
-        self.add_lemma_token = add_lemma_token
 
         self.dataset = Dataset.from_parquet(
             [str(x) for x in Path(data_dir).glob("*.parquet")]
@@ -274,10 +272,7 @@ class RMTProofsDataset:
         i = 0
         sequence_length = self.segment_length * self._max_n_segments
         while total_length < sequence_length:
-            if self.add_lemma_token:
-                args.append(self.tokenizer('<lemma> ' + rand_lemmas[i])["input_ids"])
-            else:
-                args.append(self.tokenizer(rand_lemmas[i])["input_ids"])
+            args.append(self.tokenizer('<lemma> ' + rand_lemmas[i])["input_ids"])
             i += 1
             total_length += len(args[-1])
 

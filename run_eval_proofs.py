@@ -135,6 +135,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--num_workers", type=int, default=1)
     parser.add_argument("--working_dir", type=str, default=".")
+    parser.add_argument("--proof_only_loss", type=bool, default=False)
 
     args = parser.parse_args()
 
@@ -154,7 +155,10 @@ def main():
     run_id_list = args.run_id
 
     for run_id in run_id_list:
-        ckpt_dir = str(Path(working_dir) / f"logs/rmt_proofs/{run_id}/checkpoints/")
+        if args.proof_only_loss:
+            ckpt_dir = str(Path(working_dir) / f"logs/rmt_proofs_only/{run_id}/checkpoints/")
+        else:
+            ckpt_dir = str(Path(working_dir) / f"logs/rmt_proofs/{run_id}/checkpoints/")
         print(f"Run id: {run_id}")
 
         save_filename_prefix = ""

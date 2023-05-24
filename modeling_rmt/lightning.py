@@ -167,7 +167,7 @@ class RMTModelPL(LightningModule):
         return self._module(**x)
 
     def training_step(self, batch, batch_idx):
-        if self.cfg.proof_loss_only:
+        if not isinstance(batch, dict):
             for i, segment in enumerate(batch):
                 segment['batch_idx'] = i
                 if i < len(batch) - 1:
@@ -189,7 +189,7 @@ class RMTModelPL(LightningModule):
         return out['loss']
 
     def validation_step(self, batch, batch_idx):
-        if self.cfg.proof_loss_only:
+        if not isinstance(batch, dict):
             for i, segment in enumerate(batch):
                 segment['batch_idx'] = i
                 if i < len(batch) - 1:

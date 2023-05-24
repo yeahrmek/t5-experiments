@@ -8,11 +8,20 @@ from typing import List, Optional, Tuple
 import torch
 from jsonargparse import ArgumentParser
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, EarlyStopping
+from pytorch_lightning.callbacks import (
+    EarlyStopping,
+    LearningRateMonitor,
+    ModelCheckpoint,
+)
 from pytorch_lightning.loggers import WandbLogger
-from transformers import AutoTokenizer, AutoConfig  # noqa: E402
+from transformers import AutoConfig, AutoTokenizer  # noqa: E402
 
-from lean_dataset import RMTDocsDataLoader, RMTDocsAllAtOnceDataLoader, RMTDocsDataset, RMTProofsDataset
+from lean_dataset import (
+    RMTDocsAllAtOnceDataLoader,
+    RMTDocsDataLoader,
+    RMTDocsDataset,
+    RMTProofsDataset,
+)
 from modeling_rmt.lightning import RMTModelPL
 
 logging.basicConfig(
@@ -40,7 +49,12 @@ def get_cls_by_name(name: str) -> type:
 def setup_parser():
     parser = ArgumentParser()
     parser.add_argument("--task_name", type=str, help="Task name: 'lm' or 'proofs'")
-    parser.add_argument("--model_type", type=str, default='rmt', help='rmt or base (no reccurency) model')
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default="rmt",
+        help="rmt or base (no reccurency) model",
+    )
     parser.add_argument("--proof_loss_only", type=bool, default=False)
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
     parser.add_class_arguments(WandbLogger, "logger")
@@ -378,28 +392,24 @@ def get_datasets(cfg, tokenizer):
             datasets[split].tokenize()
             datasets[split].save_tokenized(str(data_dir / f"{split}_tokenized.ckpt"))
 
-        if hasattr(datasets[split], 'split_to_segments'):
+        if hasattr(datasets[split], "split_to_segments"):
             datasets[split].split_to_segments(segment_size)
         print(f"{split}: {len(datasets[split])}")
 
-    if cfg.task_name == 'proofs':
-        datasets['val'] = datasets.pop('val_test')
-        datasets['train'].segment_length = segment_size
-        datasets['val'].segment_length = segment_size
+    if cfg.task_name == "proofs":
+        datasets["val"] = datasets.pop("val_test")
+        datasets["train"].segment_length = segment_size
+        datasets["val"].segment_length = segment_size
 
     return datasets
 
 
 def get_dataloaders(cfg, datasets):
-    if cfg.proof_loss_only:
-        loader_cls = RMTDocsAllAtOnceDataLoader
-    else:
-        loader_cls = RMTDocsDataLoader
+    loader_cls = RMTDocsAllAtOnceDataLoader
     loader_kwargs = {
         "pin_memory": True,
         "num_workers": cfg.data_n_workers,
         "batch_size": cfg.batch_size,
-        # * cfg.gradient_accumulation_steps,  # batch size per GPU
         "drop_last": True,
     }
 
@@ -443,7 +453,9 @@ def _get_pl_model(cfg, rmt_model):
         )
 
         # TODO: update config properly
-        pl_model.cfg.proof_loss_only = cfg.proof_loss_only
+        pl_model.cfg.proof_loss_only = (
+            cfg.proof_loss_only if hasattr(cfg, "proof_loss_only") else False
+        )
 
         pl_model.save_hyperparameters(ignore=["rm_model"])
     else:
@@ -476,7 +488,9 @@ def get_rmt_model(cfg, tokenizer):
         "memory_layers": cfg.memory_layers,
         "share_memory_layers": cfg.share_memory_layers,
         "reconstruction_loss_coef": cfg.reconstruction_loss_coef,
-        "proof_loss_only": cfg.proof_loss_only if hasattr(cfg, 'proof_loss_only') else False,
+        "proof_loss_only": cfg.proof_loss_only
+        if hasattr(cfg, "proof_loss_only")
+        else False,
         "proofstep_token_id": tokenizer.vocab["[PROOFSTEP]"],
     }
 
@@ -536,9 +550,9 @@ if __name__ == "__main__":
     tokenizer = get_tokenizer(cfg)
     wandb_logger = get_logger(cfg)
 
-    if cfg.model_type == 'rmt':
+    if cfg.model_type == "rmt":
         model = get_rmt_model(cfg, tokenizer)
-    elif cfg.model_type == 'base':
+    elif cfg.model_type == "base":
         model = get_base_model(cfg, tokenizer)
 
     datasets = get_datasets(cfg, tokenizer)
@@ -589,7 +603,7 @@ if __name__ == "__main__":
             n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
         )
         model.cfg.lr_scheduler.T_max = cfg.trainer.max_steps
-        if hasattr(model._module, 'set_max_n_segments'):
+        if hasattr(model._module, "set_max_n_segments"):
             model._module.set_max_n_segments(max_n_segments)
         wandb_logger._prefix = f"seg_len-{max_n_segments}"
 
@@ -604,7 +618,7 @@ if __name__ == "__main__":
         logger.info(f"Trainer max steps: {trainer.max_steps}")
         logger.info(f"Trainer max epochs: {trainer.max_epochs}")
 
-        if hasattr(model._module, 'reset_memory'):
+        if hasattr(model._module, "reset_memory"):
             model._module.reset_memory()
 
         if cfg.validate_only:
