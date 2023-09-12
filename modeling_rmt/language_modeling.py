@@ -55,6 +55,7 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         output_attentions=None,
         output_hidden_states=None,
         return_dict=None,
+        def_len=None,
     ):
         kwargs = {
             "attention_mask": attention_mask,
@@ -82,7 +83,10 @@ class RMTDecoderForCausalLM(RMTBaseModel):
         segment_input_ids = self.pad_and_segment(input_ids)[0]
 
         seg_kwargs, non_empty_mask = self.prepare_kwargs(segment_input_ids, kwargs)
-        seg_kwargs["inputs_embeds"][:, self.read_memory_position] = memory
+        if self.rmt_config['use_recur_mem']:
+            seg_kwargs["inputs_embeds"][:, self.read_memory_position] = memory
+        else:
+            seg_kwargs["inputs_embeds"][:, self.read_memory_position] = 0
         # seg_kwargs['inputs_embeds'][:, self.write_memory_position] = self.memory
 
         labels = seg_kwargs.pop("labels", None)
@@ -94,7 +98,6 @@ class RMTDecoderForCausalLM(RMTBaseModel):
 
         ### Calculate loss excluding memory
         if labels is not None:
-
             if self.rmt_config.get('proof_loss_only', None):
                 proofstep_idx = torch.where(
                     labels == self.rmt_config['proofstep_token_id']
@@ -104,20 +107,33 @@ class RMTDecoderForCausalLM(RMTBaseModel):
                         labels[i, :j] = -100
                     # assert len(proofstep_idx[0]) == len(labels)
                 else:
+                    raise Exception
                     out["loss"] = torch.zeros(1, dtype=out.logits.dtype,
                                               device=out.logits.device,
                                               requires_grad=True).sum()
                     return out
 
-            lm_logits = out.logits[:, self.num_mem_tokens : -self.num_mem_tokens]
+            out['logits'] = out.logits[:, self.num_mem_tokens : -self.num_mem_tokens]
             # Shift so that tokens < n predict n
-            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_logits = out['logits'][..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             out["loss"] = loss_fct(
                 shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1)
             )
+            if def_len is not None:
+                out['def_loss'] = torch.FloatTensor(labels.size(0))
+                out['non_def_loss'] = torch.FloatTensor(labels.size(0))
+                for i, def_size in enumerate(def_len):
+                    out['def_loss'][i] = loss_fct(
+                        shift_logits[i][:def_size].view(-1, shift_logits[i][:def_size].size(-1)), shift_labels[i][:def_size].view(-1)
+                    )
+                    out['non_def_loss'][i] = loss_fct(
+                        shift_logits[i][def_size:].view(-1, shift_logits[i][def_size:].size(-1)), shift_labels[i][def_size:].view(-1)
+                    )
+                out['def_loss'] = out['def_loss'].mean()
+                out['non_def_loss'] = torch.nan_to_num(out['non_def_loss']).mean()
 
         return out
 

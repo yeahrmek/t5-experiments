@@ -56,7 +56,13 @@ def setup_parser():
         help="rmt or base (no reccurency) model",
     )
     parser.add_argument("--proof_loss_only", type=bool, default=False)
+    parser.add_argument("--short_proofs_only", type=bool, default=False)
+    parser.add_argument("--every_segment_def", type=bool, default=True, 
+                        help="if true definition is included into begining of each segment")
+    parser.add_argument("--exclude_relevant_lemmas", type=bool, default=False)
+    parser.add_argument("--use_random_lemmas_names", type=bool, default=False)
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
+    parser.add_argument("--lemmas_path", type=str, help="Path to the JSON containing all lemmas statements")
     parser.add_class_arguments(WandbLogger, "logger")
 
     # For newer version of pytorch_lighning we add several parameters of logger explicitly
@@ -150,7 +156,7 @@ def setup_parser():
         type=List[int],
         help="Scheduler for number of segments to train on. "
         "Input should be in the following format: <n_epochs> <n_segments> <n_epochs> <n_segments> ..."
-        "Example: `--curriculum 1 1 1 2 1 5`. "
+        "Example: `--curriculum 1 1 1 2 2 5`. "
         "In this example we will first train for 1 epoch on 1 segment "
         "then train for 1 epoch on 2 segments, then for 2 epochs on 5 segments",
     )
@@ -159,6 +165,24 @@ def setup_parser():
         action="store_true",
         default=False,
         help="with this flag task loss from all segments is summed",
+    )
+    parser.add_argument(
+        "--def_lemmas_loss_weight",
+        type=float,
+        default=0.0,
+        help="weight of decl_def and lemmas loss in total loss"
+    )
+    parser.add_argument(
+        "--proof_loss_weight",
+        type=float,
+        default=1.0,
+        help="weight of proof loss in total loss"
+    )
+    parser.add_argument(
+        "--use_recur_mem",
+        type=bool,
+        default=True,
+        help="Use recurrent memory or not. If false, the model uses memory but only working on current segment."
     )
     parser.add_argument(
         "--bptt_depth",
@@ -331,10 +355,10 @@ def setup_env_and_args(cfg):
     if cfg.trainer.log_every_n_steps is None:
         cfg.trainer.log_every_n_steps = 50
     cfg.trainer.log_every_n_steps = (
-        cfg.trainer.log_every_n_steps // cfg.trainer.accumulate_grad_batches
+        cfg.trainer.log_every_n_steps #// cfg.trainer.accumulate_grad_batches
     )
     cfg.lr_scheduler.warmup_epochs = (
-        cfg.lr_scheduler.warmup_epochs // cfg.trainer.accumulate_grad_batches
+        cfg.lr_scheduler.warmup_epochs #// cfg.trainer.accumulate_grad_batches
     )
 
     pprint(cfg.as_dict())
@@ -382,13 +406,20 @@ def get_datasets(cfg, tokenizer):
 
     datasets = {}
     data_dir = Path(cfg.data_dir)
+    lemmas_path = Path(cfg.lemmas_path)
     for split in split_list:
         if (data_dir / f"{split}_tokenized.ckpt").exists():
             datasets[split] = data_cls.load_tokenized(
                 data_dir / f"{split}_tokenized.ckpt"
             )
         else:
-            datasets[split] = data_cls(data_dir / split, tokenizer, cfg.max_n_segments)
+            datasets[split] = data_cls(data_dir / split, lemmas_path, tokenizer, cfg.max_n_segments,
+                                      segment_length=segment_size,
+                                      short_proofs_only=cfg.short_proofs_only,
+                                      every_segment_def=cfg.every_segment_def,
+                                      exclude_relevant_lemmas=cfg.exclude_relevant_lemmas,
+                                      use_random_lemmas_names=cfg.use_random_lemmas_names)
+            datasets[split].filter_shorts()
             datasets[split].tokenize()
             datasets[split].save_tokenized(str(data_dir / f"{split}_tokenized.ckpt"))
 
@@ -483,6 +514,8 @@ def get_rmt_model(cfg, tokenizer):
         "input_size": cfg.input_size,
         "bptt_depth": cfg.bptt_depth,
         "sum_loss": cfg.sum_loss,
+        "def_lemmas_loss_weight": cfg.def_lemmas_loss_weight,
+        "proof_loss_weight": cfg.proof_loss_weight,
         "tokenizer": tokenizer,
         "memory_forward_func": cfg.memory_forward_func,
         "memory_layers": cfg.memory_layers,
@@ -492,6 +525,7 @@ def get_rmt_model(cfg, tokenizer):
         if hasattr(cfg, "proof_loss_only")
         else False,
         "proofstep_token_id": tokenizer.vocab["[PROOFSTEP]"],
+        "use_recur_mem": cfg.use_recur_mem,
     }
 
     backbone = _get_backbone_model(cfg)
@@ -508,8 +542,8 @@ def get_rmt_model(cfg, tokenizer):
 
 
 def get_base_model(cfg, tokenizer):
-    if cfg.proof_loss_only:
-        raise NotImplementedError
+    #if cfg.proof_loss_only:
+    #    raise NotImplementedError
     backbone = _get_backbone_model(cfg)
     pl_model = _get_pl_model(cfg, backbone)
     # pl_model = torch.compile(pl_model)
@@ -542,7 +576,7 @@ def get_trainer_callbacks(n_segments):
 if __name__ == "__main__":
     parser = setup_parser()
     cfg = parser.parse_args()
-
+    
     seed_everything(cfg.seed)
 
     setup_env_and_args(cfg)
@@ -556,6 +590,13 @@ if __name__ == "__main__":
         model = get_base_model(cfg, tokenizer)
 
     datasets = get_datasets(cfg, tokenizer)
+    
+    for idx in range(0, 10000, 1000):
+        print('-' * 100)
+        for arg in datasets["train"].tokenized["args"][0][idx]:
+            print(tokenizer.decode(arg))
+        print(tokenizer.decode(datasets["train"][idx][0]["input_ids"]))
+        print(tokenizer.decode(datasets["train"][idx][1]["input_ids"]))
 
     # find resume ckpt path
     max_n_segments_ckpt = 0
