@@ -7,6 +7,7 @@ import torch
 from pytorch_lightning import LightningModule
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim.optimizer import Optimizer
+from transformers import GPTNeoForCausalLM
 
 ALL_LAYERNORM_LAYERS = [torch.nn.LayerNorm]
 
@@ -161,28 +162,94 @@ class RMTModelPL(LightningModule):
             )
 
     def forward(self, x, **kwargs):
-        return self._module(**x)
+        if isinstance(self._module, GPTNeoForCausalLM):
+            return self._module(**{k: v for k, v in x.items() if k != 'batch_idx' and k != 'def_len'})
+        return self._module(**x, **kwargs)
 
     def training_step(self, batch, batch_idx):
-        out = self(batch)
+        loss = None
+        batch_size = 0
+        if not isinstance(batch, dict):
+            for i, segment in enumerate(batch):
+                segment['batch_idx'] = i
+                #if i < len(batch) - 1:
+                #    segment.pop('labels')
+                out = self(segment)
+                if i < len(batch) - 1:
+                    if loss == None:
+                        loss = out['loss'] * self.cfg.def_lemmas_loss_weight / (len(batch) - 1)
+                    else:
+                        loss += out['loss'] * self.cfg.def_lemmas_loss_weight / (len(batch) - 1) # len(batch) - 1 segments contain lemmas
+                else:
+                    if loss == None:
+                        loss = out['loss'] # in this case there is only one segment and it contains a proof
+                    else:
+                        loss += out['loss'] * self.cfg.proof_loss_weight
+                batch_size += segment['input_ids'].shape[0]
+        else:
+            out = self(batch)
+            batch_size = batch['input_ids'].shape[0]
+
         self._log(
             "train",
             {
-                "loss": out['loss'],
-                "perplexity": torch.exp(out["loss"].detach())
+                "loss": loss,
+                "perplexity": torch.exp(loss.detach())
             },
-            batch_size=batch['input_ids'].shape[0]
+            batch_size=batch_size
         )
-        return out['loss']
+        return loss
 
     def validation_step(self, batch, batch_idx):
-        out = self(batch)
+        loss = None
+        proof_loss = None
+        def_lemmas_loss = None
+        batch_size = 0
+        segment_def_losses = []
+        segment_non_def_losses = []
+        if not isinstance(batch, dict):
+            for i, segment in enumerate(batch):
+                segment['batch_idx'] = i
+                #if i < len(batch) - 1:
+                #    segment.pop('labels')
+                out = self(segment)
+                if i < len(batch) - 1:
+                    if def_lemmas_loss == None:
+                        def_lemmas_loss = out['loss'] / (len(batch) - 1)
+                    else:
+                        def_lemmas_loss += out['loss'] / (len(batch) - 1)
+                    if loss == None:
+                        loss = out['loss'] * self.cfg.def_lemmas_loss_weight / (len(batch) - 1)
+                    else:
+                        loss += out['loss'] * self.cfg.def_lemmas_loss_weight / (len(batch) - 1) # len(batch) - 1 segments contain lemmas
+                else:
+                    if proof_loss == None:
+                        proof_loss = out['loss']
+                    else:
+                        proof_loss += out['loss']
+                    if loss == None:
+                        loss = out['loss'] # in this case there is only one segment and it contains a proof
+                    else:
+                        loss += out['loss'] * self.cfg.proof_loss_weight
+                segment_def_losses.append(out['def_loss'])
+                segment_non_def_losses.append(out['non_def_loss'])
+                batch_size += segment['input_ids'].shape[0]
+        else:
+            raise NotImplementedError
+#             out = self(batch)
+#             batch_size = batch['input_ids'].shape[0]
+
         metrics = {
-            "loss": out["loss"],
-            "perplexity": torch.exp(out["loss"])
+            "loss": loss,
+            "last_seg_loss": proof_loss,
+            "def_lemmas_loss": def_lemmas_loss if def_lemmas_loss else 0
         }
-        self._log("val", metrics, on_step=False, on_epoch=True, sync_dist=True,
-                  batch_size=batch['input_ids'].shape[0])
+        for i in range(len(segment_def_losses)):
+            segment_def_loss = segment_def_losses[i]
+            segment_non_def_loss = segment_non_def_losses[i]
+            metrics["seg_{}_def_loss".format(i + 1)] = segment_def_loss.detach()
+            metrics["seg_{}_non_def_loss".format(i + 1)] = segment_non_def_loss.detach()
+        self._log("val", metrics, on_step=False, on_epoch=True, sync_dist=True, batch_size=batch_size)
 
     def configure_optimizers(self):
 
@@ -226,26 +293,28 @@ class RMTModelPL(LightningModule):
         for k, v in log_dict.items():
             self.log(f"{prefix}/{k}", v, **kwargs)
 
-    @classmethod
-    def load_from_checkpoint(cls, ckpt_path, map_location=None, strict=True, **init_kwargs):
-        ckpt_path = Path(ckpt_path)
-        if not ckpt_path.is_dir():
-            model = super(LightningModule, cls).load_from_checkpoint(
-                ckpt_path, map_location=map_location, strict=strict
-            )
-        else:
-            state = torch.load(
-                ckpt_path / "checkpoint" / "mp_rank_00_model_states.pt",
-                map_location=map_location,
-            )
-            state["state_dict"] = state.pop("module")
+#     @classmethod
+#     def load_from_checkpoint(cls, ckpt_path, map_location=None, strict=True, **init_kwargs):
+#         ckpt_path = Path(ckpt_path)
+#         if not ckpt_path.is_dir():
+#             print(type(super()))
+#             #model = super(LightningModule, cls).load_from_checkpoint(
+#             model = super().load_from_checkpoint(
+#                 ckpt_path, map_location=map_location, strict=strict
+#             )
+#         else:
+#             state = torch.load(
+#                 ckpt_path / "checkpoint" / "mp_rank_00_model_states.pt",
+#                 map_location=map_location,
+#             )
+#             state["state_dict"] = state.pop("module")
 
-            for key in list(state["state_dict"].keys()):
-                state["state_dict"][key.replace("_forward_module.", "")] = state[
-                    "state_dict"
-                ].pop(key)
+#             for key in list(state["state_dict"].keys()):
+#                 state["state_dict"][key.replace("_forward_module.", "")] = state[
+#                     "state_dict"
+#                 ].pop(key)
 
-            model = cls(**init_kwargs, **state["hyper_parameters"])
-            model._set_hparams(state["hyper_parameters"])
-            model.load_state_dict(state["state_dict"], strict=strict)
-        return model
+#             model = cls(**init_kwargs, **state["hyper_parameters"])
+#             model._set_hparams(state["hyper_parameters"])
+#             model.load_state_dict(state["state_dict"], strict=strict)
+#         return model

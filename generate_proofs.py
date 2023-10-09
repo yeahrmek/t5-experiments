@@ -2,6 +2,7 @@ import importlib
 import logging
 import os
 from pathlib import Path
+from pprint import pprint
 from typing import List, Optional, Tuple
 
 import torch
@@ -13,9 +14,14 @@ from pytorch_lightning.callbacks import (
     ModelCheckpoint,
 )
 from pytorch_lightning.loggers import WandbLogger
-from transformers import AutoTokenizer  # noqa: E402
+from transformers import AutoConfig, AutoTokenizer  # noqa: E402
 
-from lean_dataset import RMTDocsDataLoader, RMTProofsDataset
+from lean_dataset import (
+    RMTDocsAllAtOnceDataLoader,
+    RMTDocsDataLoader,
+    RMTDocsDataset,
+    RMTProofsDataset,
+)
 from modeling_rmt.lightning import RMTModelPL
 
 logging.basicConfig(
@@ -42,8 +48,21 @@ def get_cls_by_name(name: str) -> type:
 
 def setup_parser():
     parser = ArgumentParser()
-    parser.add_argument("--task_name", type=str, help="Task name, wikitext, ...")
+    parser.add_argument("--task_name", type=str, help="Task name: 'lm' or 'proofs'")
+    parser.add_argument(
+        "--model_type",
+        type=str,
+        default="rmt",
+        help="rmt or base (no reccurency) model",
+    )
+    parser.add_argument("--proof_loss_only", type=bool, default=False)
+    parser.add_argument("--short_proofs_only", type=bool, default=False)
+    parser.add_argument("--every_segment_def", type=bool, default=True, 
+                        help="if true definition is included into begining of each segment")
+    parser.add_argument("--exclude_relevant_lemmas", type=bool, default=False)
+    parser.add_argument("--use_random_lemmas_names", type=bool, default=False)
     parser.add_argument("--data_dir", type=str, help="Path to the data directory")
+    parser.add_argument("--lemmas_path", type=str, help="Path to the JSON containing all lemmas statements")
     parser.add_class_arguments(WandbLogger, "logger")
 
     # For newer version of pytorch_lighning we add several parameters of logger explicitly
@@ -137,7 +156,7 @@ def setup_parser():
         type=List[int],
         help="Scheduler for number of segments to train on. "
         "Input should be in the following format: <n_epochs> <n_segments> <n_epochs> <n_segments> ..."
-        "Example: `--curriculum 1 1 1 2 1 5`. "
+        "Example: `--curriculum 1 1 1 2 2 5`. "
         "In this example we will first train for 1 epoch on 1 segment "
         "then train for 1 epoch on 2 segments, then for 2 epochs on 5 segments",
     )
@@ -146,6 +165,24 @@ def setup_parser():
         action="store_true",
         default=False,
         help="with this flag task loss from all segments is summed",
+    )
+    parser.add_argument(
+        "--def_lemmas_loss_weight",
+        type=float,
+        default=0.0,
+        help="weight of decl_def and lemmas loss in total loss"
+    )
+    parser.add_argument(
+        "--proof_loss_weight",
+        type=float,
+        default=1.0,
+        help="weight of proof loss in total loss"
+    )
+    parser.add_argument(
+        "--use_recur_mem",
+        type=bool,
+        default=True,
+        help="Use recurrent memory or not. If false, the model uses memory but only working on current segment."
     )
     parser.add_argument(
         "--bptt_depth",
@@ -318,11 +355,13 @@ def setup_env_and_args(cfg):
     if cfg.trainer.log_every_n_steps is None:
         cfg.trainer.log_every_n_steps = 50
     cfg.trainer.log_every_n_steps = (
-        cfg.trainer.log_every_n_steps // cfg.trainer.accumulate_grad_batches
+        cfg.trainer.log_every_n_steps #// cfg.trainer.accumulate_grad_batches
     )
     cfg.lr_scheduler.warmup_epochs = (
-        cfg.lr_scheduler.warmup_epochs // cfg.trainer.accumulate_grad_batches
+        cfg.lr_scheduler.warmup_epochs #// cfg.trainer.accumulate_grad_batches
     )
+
+    pprint(cfg.as_dict())
 
 
 def get_tokenizer(cfg):
@@ -350,6 +389,13 @@ def get_logger(cfg):
 
 
 def get_datasets(cfg, tokenizer):
+    if cfg.task_name == "lm":
+        data_cls = RMTDocsDataset
+        split_list = ["train", "val"]
+    elif cfg.task_name == "proofs":
+        data_cls = RMTProofsDataset
+        split_list = ["train", "val_test"]
+
     # get datasets
     segment_size = (
         cfg.input_size - 2 * cfg.num_mem_tokens - tokenizer.num_special_tokens_to_add()
@@ -360,40 +406,53 @@ def get_datasets(cfg, tokenizer):
 
     datasets = {}
     data_dir = Path(cfg.data_dir)
-    for split in ["train", "val"]:
+    lemmas_path = Path(cfg.lemmas_path)
+    for split in split_list:
         if (data_dir / f"{split}_tokenized.ckpt").exists():
-            datasets[split] = RMTDocsDataset.load_tokenized(
+            datasets[split] = data_cls.load_tokenized(
                 data_dir / f"{split}_tokenized.ckpt"
             )
         else:
-            datasets[split] = RMTDocsDataset(
-                data_dir / split, tokenizer, cfg.max_n_segments
-            )
+            datasets[split] = data_cls(data_dir / split, lemmas_path, tokenizer, cfg.max_n_segments,
+                                      segment_length=segment_size,
+                                      short_proofs_only=cfg.short_proofs_only,
+                                      every_segment_def=cfg.every_segment_def,
+                                      exclude_relevant_lemmas=cfg.exclude_relevant_lemmas,
+                                      use_random_lemmas_names=cfg.use_random_lemmas_names)
+            datasets[split].filter_shorts()
             datasets[split].tokenize()
             datasets[split].save_tokenized(str(data_dir / f"{split}_tokenized.ckpt"))
-        datasets[split].split_to_segments(segment_size)
+
+        if hasattr(datasets[split], "split_to_segments"):
+            datasets[split].split_to_segments(segment_size)
+        print(f"{split}: {len(datasets[split])}")
+
+    if cfg.task_name == "proofs":
+        datasets["val"] = datasets.pop("val_test")
+        datasets["train"].segment_length = segment_size
+        datasets["val"].segment_length = segment_size
 
     return datasets
 
 
 def get_dataloaders(cfg, datasets):
+    loader_cls = RMTDocsAllAtOnceDataLoader
     loader_kwargs = {
         "pin_memory": True,
         "num_workers": cfg.data_n_workers,
         "batch_size": cfg.batch_size,
-        # * cfg.gradient_accumulation_steps,  # batch size per GPU
         "drop_last": True,
     }
 
     loaders = {}
 
-    loaders["train"] = RMTDocsDataLoader(
+    loaders["train"] = loader_cls(
         datasets["train"],
         shuffle=True,
         **loader_kwargs,
     )
 
-    loaders["val"] = RMTDocsDataLoader(
+    loaders["val"] = loader_cls(
         datasets["val"],
         **loader_kwargs,
     )
@@ -401,40 +460,35 @@ def get_dataloaders(cfg, datasets):
     return loaders
 
 
-def get_model(cfg, tokenizer):
-    rmt_config = {
-        "num_mem_tokens": cfg.num_mem_tokens,
-        "max_n_segments": cfg.max_n_segments,
-        "input_size": cfg.input_size,
-        "bptt_depth": cfg.bptt_depth,
-        "sum_loss": cfg.sum_loss,
-        "tokenizer": tokenizer,
-        "memory_forward_func": cfg.memory_forward_func,
-        "memory_layers": cfg.memory_layers,
-        "share_memory_layers": cfg.share_memory_layers,
-        "reconstruction_loss_coef": cfg.reconstruction_loss_coef,
-    }
-
+def _get_backbone_model(cfg):
     # Load backbone model
     backbone_cls = get_cls_by_name(cfg.backbone_cls)
     if os.environ.get("LOCAL_RANK", 0) == 0:
         logger.info(f"Using model class: {backbone_cls}")
+        logger.info(f"Loading model from {cfg.backbone_cpt}")
 
-    backbone = backbone_cls.from_pretrained(cfg.backbone_cpt, attention_types=[[["global"], 24]]) # delete attention_types!!!
+    try:
+        backbone = backbone_cls.from_pretrained(cfg.backbone_cpt)
+        logger.info(f"Model loaded from {cfg.backbone_cpt}")
+    except OSError:
+        backbone = backbone_cls(config=AutoConfig.from_pretrained(cfg.backbone_cpt))
 
-    # Load RMT model
-    rmt_cls = get_cls_by_name(cfg.rmt_cls)
-    if os.environ.get("LOCAL_RANK", 0) == 0:
-        logger.info(f"Wrapping in: {rmt_cls}")
+    return backbone
 
-    rmt_model = rmt_cls(backbone, **rmt_config)
 
+def _get_pl_model(cfg, rmt_model):
     if cfg.pretrained_ckpt and not cfg.resume_training:
         logger.info(f"Loading checkpoint: {cfg.pretrained_ckpt}")
         pl_model = RMTModelPL.load_from_checkpoint(
             cfg.pretrained_ckpt, rmt_model=rmt_model
         )
-        pl_model.save_hyperparameters(ignore=['rm_model'])
+
+        # TODO: update config properly
+        pl_model.cfg.proof_loss_only = (
+            cfg.proof_loss_only if hasattr(cfg, "proof_loss_only") else False
+        )
+
+        pl_model.save_hyperparameters(ignore=["rm_model"])
     else:
         pl_model = RMTModelPL(rmt_model, cfg)
 
@@ -445,6 +499,54 @@ def get_model(cfg, tokenizer):
         if os.environ.get("LOCAL_RANK", 0) == 0:
             logger.info(f"Frozen moodel weights except embeddings")
 
+    # try:
+    #     pl_model._module.model = torch.compile(pl_model._module.model)
+    #     print("Model compiled")
+    # except:
+    #     pass
+    return pl_model
+
+
+def get_rmt_model(cfg, tokenizer):
+    rmt_config = {
+        "num_mem_tokens": cfg.num_mem_tokens,
+        "max_n_segments": cfg.max_n_segments,
+        "input_size": cfg.input_size,
+        "bptt_depth": cfg.bptt_depth,
+        "sum_loss": cfg.sum_loss,
+        "def_lemmas_loss_weight": cfg.def_lemmas_loss_weight,
+        "proof_loss_weight": cfg.proof_loss_weight,
+        "tokenizer": tokenizer,
+        "memory_forward_func": cfg.memory_forward_func,
+        "memory_layers": cfg.memory_layers,
+        "share_memory_layers": cfg.share_memory_layers,
+        "reconstruction_loss_coef": cfg.reconstruction_loss_coef,
+        "proof_loss_only": cfg.proof_loss_only
+        if hasattr(cfg, "proof_loss_only")
+        else False,
+        "proofstep_token_id": tokenizer.vocab["[PROOFSTEP]"],
+        "use_recur_mem": cfg.use_recur_mem,
+    }
+
+    backbone = _get_backbone_model(cfg)
+
+    # Load RMT model
+    rmt_cls = get_cls_by_name(cfg.rmt_cls)
+    if os.environ.get("LOCAL_RANK", 0) == 0:
+        logger.info(f"Wrapping in: {rmt_cls}")
+
+    rmt_model = rmt_cls(backbone, **rmt_config)
+    pl_model = _get_pl_model(cfg, rmt_model)
+
+    return pl_model
+
+
+def get_base_model(cfg, tokenizer):
+    #if cfg.proof_loss_only:
+    #    raise NotImplementedError
+    backbone = _get_backbone_model(cfg)
+    pl_model = _get_pl_model(cfg, backbone)
+    # pl_model = torch.compile(pl_model)
     return pl_model
 
 
@@ -460,21 +562,43 @@ def get_trainer_callbacks(n_segments):
             + "-epoch={epoch:02d}-step={step}-loss={val/loss:.4f}",
         ),
         LearningRateMonitor(logging_interval="step"),
-        # EarlyStopping(
-        #     monitor="val/loss",
-        #     mode="min",
-        #     strict=False,
-        #     patience=3,
-        #     check_finite=False,
-        # ),
+        EarlyStopping(
+            monitor="val/loss",
+            mode="min",
+            strict=False,
+            patience=5,
+            check_finite=False,
+        ),
     ]
     return callbacks
 
+def generate_proof(model, batch, max_new_tokens=30):
+    for i, segment in enumerate(batch):
+        for key in segment:
+            segment[key] = torch.stack([segment[key]]).to(model.device)
+        segment['batch_idx'] = i
+        
+    lemmas = batch[:-1]
+    proof = batch[-1]
+    def_len = batch[0]["def_len"][0]
+    proof["input_ids"][0][def_len + 1:] = tokenizer.pad_token_id
+    proof["attention_mask"][0][def_len + 1:] = 0
+    
+    for idx in range(def_len + 1, def_len + 1 + max_new_tokens):
+        model._module.reset_memory()
+        for segment in lemmas:
+            model(segment)
+        logits = model(proof)["logits"][0][idx - 1]
+        proof["input_ids"][0][idx] = torch.argmax(logits)
+        proof["attention_mask"][0][idx] = 1
+    
+    return proof["input_ids"][0]
+        
 
 if __name__ == "__main__":
     parser = setup_parser()
     cfg = parser.parse_args()
-
+    
     seed_everything(cfg.seed)
 
     setup_env_and_args(cfg)
@@ -482,82 +606,44 @@ if __name__ == "__main__":
     tokenizer = get_tokenizer(cfg)
     wandb_logger = get_logger(cfg)
 
-    model = get_model(cfg, tokenizer)
+    if cfg.model_type == "rmt":
+        model = get_rmt_model(cfg, tokenizer)
+    elif cfg.model_type == "base":
+        model = get_base_model(cfg, tokenizer)
 
     datasets = get_datasets(cfg, tokenizer)
 
     # find resume ckpt path
-    max_n_segments_ckpt = 0
-    resume_ckpt_path = None
-    if cfg.resume_training:
-        ckpt_dir = (
-            Path(wandb_logger.save_dir)
-            / wandb_logger._project
-            / wandb_logger.version
-            / "checkpoints"
-        )
-        best_version = None
-        resume_ckpt_path = ckpt_dir / 'last.ckpt'
-        for path in ckpt_dir.glob('last*.ckpt'):
-            if path.name != 'last.ckpt':
-                version = int(path.name.split('-v')[1].split('.ckpt')[0])
-                if best_version is None or version > best_version:
-                    resume_ckpt_path = path
-                    best_version = version
+    ckpt_dir = (
+        Path(wandb_logger.save_dir)
+        / wandb_logger._project
+        / "yhq633jt" # TODO: make a parameter
+        / "checkpoints"
+    )
+    resume_ckpt_path = ckpt_dir / "last-v5.ckpt"
+    logger.info(f"Evaluation checkpoint: {resume_ckpt_path}")
+    model = RMTModelPL.load_from_checkpoint(
+        resume_ckpt_path, rmt_model=model._module
+    )
+    max_n_segments = 2
+    for split, ds in datasets.items():
+        ds.set_max_n_segments(max_n_segments)
+    cfg.max_n_segments = max_n_segments
 
-        for path in ckpt_dir.glob("*.ckpt"):
-            if "n_segments=" in path.name:
-                n_segments = path.name.split("n_segments=")[1]
-                n_segments = int(n_segments.split("-epoch")[0])
-                max_n_segments_ckpt = max(max_n_segments_ckpt, n_segments)
-
-        logger.info(f"Resuming from: {resume_ckpt_path}")
-        model = RMTModelPL.load_from_checkpoint(
-            resume_ckpt_path, rmt_model=model._module
-        )
-        logger.info(f"Resuming n_segments: {max_n_segments_ckpt}")
-
-    for n_epochs, max_n_segments in zip(
-        cfg.curriculum["n_epochs"], cfg.curriculum["max_n_segments"]
-    ):
-        if max_n_segments < max_n_segments_ckpt:
-            continue
-
-        for split, ds in datasets.items():
-            ds.set_max_n_segments(max_n_segments)
-        loaders = get_dataloaders(cfg, datasets)
-
-        cfg.max_n_segments = max_n_segments
-        cfg.trainer.max_steps = n_epochs * len(loaders["train"]) // cfg.trainer.accumulate_grad_batches
-        model.cfg.lr_scheduler.T_max = cfg.trainer.max_steps
+    if hasattr(model._module, "set_max_n_segments"):
         model._module.set_max_n_segments(max_n_segments)
-        wandb_logger._prefix = f"seg_len-{max_n_segments}"
 
-        trainer_options = cfg.trainer.as_dict()
-        trainer_options["logger"] = wandb_logger
-        trainer_options["callbacks"] = get_trainer_callbacks(max_n_segments)
-        trainer = Trainer(**trainer_options)
-
-        logger.info("-" * 80)
-        logger.info(f"Max number of segments: {max_n_segments}")
-        logger.info(f'N batches per epoch: {len(loaders["train"])}')
-        logger.info(f'Trainer max steps: {trainer.max_steps}')
-        logger.info(f"Trainer max epochs: {trainer.max_epochs}")
-
+    if hasattr(model._module, "reset_memory"):
         model._module.reset_memory()
 
-        if cfg.validate_only:
-            trainer.validate(model, loaders["val"])
-        elif max_n_segments == max_n_segments_ckpt:
-            trainer.fit(
-                model,
-                train_dataloaders=loaders["train"],
-                val_dataloaders=loaders["val"],
-                ckpt_path=resume_ckpt_path,
-            )
-        else:
-            trainer.fit(
-                model,
-                train_dataloaders=loaders["train"],
-                val_dataloaders=loaders["val"],
-            )
+    model.eval()
+    
+    max_new_tokens = 200
+    
+    for split in ["train", "val"]:
+        print('-' * 100, f"Split: {split}", '-' * 100, sep='\n')
+        dataset = datasets[split]
+        for idx in range(0, len(dataset), len(dataset) // 11):
+            print('-' * 100)
+            print("Label:", tokenizer.decode(dataset[idx][-1]["input_ids"], skip_special_tokens=True), sep="\n")
+            print("Genrated:", tokenizer.decode(generate_proof(model, dataset[idx], max_new_tokens), skip_special_tokens=True), sep="\n")

@@ -12,7 +12,6 @@ proof_loss_only=false
 short_proofs_only=true
 every_segment_def=true
 exclude_relevant_lemmas=false
-use_random_lemmas_names=true
 
 use_recur_mem=true
 
@@ -21,22 +20,19 @@ proof_loss_weight=0.5
 
 num_mem_tokens=10
 # curriculum="[3,2,2,3,2,4,2,5,1,6,1,7]"
-#curriculum="[3,1,3,2,2,3,2,4,2,5,1,6,1,7]"
-curriculum="[4,1,4,2,3,3,2,4,2,5,1,6,1,7]"
-#curriculum="[7,2,2,3,2,4,2,5]"
+curriculum="[7,2,2,3,2,4,2,5,1,6,1,7]"
 #curriculum=[6,7]
-#curriculum=[7,2,2,3,2,4,2,5,2,2,1,3,1,4,1,5]
 model_type="rmt"
 
 lr=1e-5
 
 input_size=512
-batch_size=2
+batch_size=32
 accumulate_grad_batches=16
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=3
 
-python run_finetuning_lean_pl.py \
+python generate_proofs.py \
   --task_name $task_name \
   --model_type $model_type \
   --logger.save_dir ./logs \
@@ -51,13 +47,12 @@ python run_finetuning_lean_pl.py \
   --short_proofs_only $short_proofs_only \
   --every_segment_def $every_segment_def \
   --exclude_relevant_lemmas $exclude_relevant_lemmas \
-  --use_random_lemmas_names $use_random_lemmas_names \
   --proof_loss_only $proof_loss_only \
   --def_lemmas_loss_weight $def_lemmas_loss_weight \
   --proof_loss_weight $proof_loss_weight \
   --use_recur_mem $use_recur_mem \
   --input_size $input_size \
-  --tokenizer  ../updated_tokenizer.ckpt \
+  --tokenizer  ../mix2_tokenizer.ckpt \
   --backbone_cls transformers:GPTNeoForCausalLM \
   --backbone_cpt ../mix2_2zywvs69.ckpt \
   --rmt_cls modeling_rmt:RMTDecoderForCausalLM \

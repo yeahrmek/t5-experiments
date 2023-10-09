@@ -6,6 +6,8 @@ notebooks/
 *$py.class
 
 logs/
+generating/
+honup.out
 
 # C extensions
 *.so
