@@ -601,6 +601,16 @@ if __name__ == "__main__":
 
     datasets = get_datasets(cfg, tokenizer)
     
+<<<<<<< HEAD
+=======
+    for idx in range(0, 10000, 1000):
+        print('-' * 100)
+        for arg in datasets["train"].tokenized["args"][0][idx]:
+            print(tokenizer.decode(arg))
+        print(tokenizer.decode(datasets["train"][idx][0]["input_ids"]))
+        print(tokenizer.decode(datasets["train"][idx][1]["input_ids"]))
+
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
     # find resume ckpt path
     max_n_segments_ckpt = 0
     resume_ckpt_path = None

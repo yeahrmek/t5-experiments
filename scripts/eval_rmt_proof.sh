@@ -11,7 +11,11 @@ evaluated_ckpt="yhq633jt"
 proof_loss_only=false
 short_proofs_only=true
 every_segment_def=true
+<<<<<<< HEAD
 exclude_relevant_lemmas=true
+=======
+exclude_relevant_lemmas=false
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 
 use_recur_mem=true
 
@@ -20,8 +24,12 @@ proof_loss_weight=0.5
 
 num_mem_tokens=10
 # curriculum="[3,2,2,3,2,4,2,5,1,6,1,7]"
+<<<<<<< HEAD
 #curriculum="[7,2,2,3,2,4,2,5,1,6,1,7]"
 curriculum="[7,2,2,3,2,4,2,5,1,6]"
+=======
+curriculum="[7,2,2,3,2,4,2,5,1,6,1,7]"
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 #curriculum=[6,7]
 model_type="rmt"
 
@@ -31,7 +39,11 @@ input_size=512
 batch_size=32
 accumulate_grad_batches=16
 
+<<<<<<< HEAD
 export CUDA_VISIBLE_DEVICES=5
+=======
+export CUDA_VISIBLE_DEVICES=0
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 
 python eval_rmt_lean.py \
   --task_name $task_name \
@@ -70,6 +82,10 @@ python eval_rmt_lean.py \
   --trainer.num_sanity_val_steps 1 \
   --trainer.accelerator auto \
   --trainer.devices auto \
+<<<<<<< HEAD
   --log_json doubled_first.json \
   --seed 43
+=======
+  --log_json test_val.json
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 #  --trainer.strategy deepspeed_stage_2_offload

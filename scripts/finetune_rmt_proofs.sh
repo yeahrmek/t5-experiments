@@ -21,8 +21,12 @@ proof_loss_weight=0.5
 
 num_mem_tokens=10
 # curriculum="[3,2,2,3,2,4,2,5,1,6,1,7]"
+<<<<<<< HEAD
 #curriculum="[3,1,3,2,2,3,2,4,2,5,1,6,1,7]"
 curriculum="[4,1,4,2,3,3,2,4,2,5,1,6,1,7]"
+=======
+curriculum="[7,2,2,3,2,4,2,5,1,6,1,7]"
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 #curriculum="[7,2,2,3,2,4,2,5]"
 #curriculum=[6,7]
 #curriculum=[7,2,2,3,2,4,2,5,2,2,1,3,1,4,1,5]
@@ -34,7 +38,11 @@ input_size=512
 batch_size=2
 accumulate_grad_batches=16
 
+<<<<<<< HEAD
 export CUDA_VISIBLE_DEVICES=2
+=======
+export CUDA_VISIBLE_DEVICES=0
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 
 python run_finetuning_lean_pl.py \
   --task_name $task_name \
@@ -57,7 +65,11 @@ python run_finetuning_lean_pl.py \
   --proof_loss_weight $proof_loss_weight \
   --use_recur_mem $use_recur_mem \
   --input_size $input_size \
+<<<<<<< HEAD
   --tokenizer  ../updated_tokenizer.ckpt \
+=======
+  --tokenizer  ../mix2_tokenizer.ckpt \
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
   --backbone_cls transformers:GPTNeoForCausalLM \
   --backbone_cpt ../mix2_2zywvs69.ckpt \
   --rmt_cls modeling_rmt:RMTDecoderForCausalLM \

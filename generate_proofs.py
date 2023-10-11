@@ -594,6 +594,32 @@ def generate_proof(model, batch, max_new_tokens=30):
     
     return proof["input_ids"][0]
         
+def generate_goal(model, batch, max_new_tokens=30):
+    for i, segment in enumerate(batch):
+        for key in segment:
+            segment[key] = torch.stack([segment[key]]).to(model.device)
+        segment['batch_idx'] = i
+        
+    lemmas = batch[:-1]
+    prelast_seg = batch[-2]
+    def_len = batch[0]["def_len"][0]
+    prelast_seg["input_ids"][0][1:] = tokenizer.pad_token_id
+    prelast_seg["attention_mask"][0][1:] = 0
+    
+    mem = None
+    for idx in range(1, max_new_tokens):
+        model._module.reset_memory()
+        #for segment in lemmas:
+        #    model(segment)
+        #newmem = model._module.memory_states[-1][1]
+#         if mem is not None:
+#             print("MEMORY REL DIFF", torch.norm(mem - newmem) / torch.norm(mem))
+#         mem = newmem
+        logits = model(prelast_seg)["logits"][0][idx - 1]
+        prelast_seg["input_ids"][0][idx] = torch.argmax(logits)
+        prelast_seg["attention_mask"][0][idx] = 1
+    
+    return prelast_seg["input_ids"][0]
 
 if __name__ == "__main__":
     parser = setup_parser()
@@ -617,7 +643,7 @@ if __name__ == "__main__":
     ckpt_dir = (
         Path(wandb_logger.save_dir)
         / wandb_logger._project
-        / "yhq633jt" # TODO: make a parameter
+        / "1qcgogez" # TODO: make a parameter
         / "checkpoints"
     )
     resume_ckpt_path = ckpt_dir / "last-v5.ckpt"
@@ -640,10 +666,29 @@ if __name__ == "__main__":
     
     max_new_tokens = 200
     
+    
     for split in ["train", "val"]:
         print('-' * 100, f"Split: {split}", '-' * 100, sep='\n')
         dataset = datasets[split]
         for idx in range(0, len(dataset), len(dataset) // 11):
             print('-' * 100)
-            print("Label:", tokenizer.decode(dataset[idx][-1]["input_ids"], skip_special_tokens=True), sep="\n")
-            print("Genrated:", tokenizer.decode(generate_proof(model, dataset[idx], max_new_tokens), skip_special_tokens=True), sep="\n")
+            print("Label:", tokenizer.decode(dataset[idx][-2]["input_ids"]), sep="\n")
+            print("Genrated:", tokenizer.decode(generate_goal(model, dataset[idx], max_new_tokens)), sep="\n")
+    
+    for idx in range(0, 1000, 100):
+        print('-' * 100)
+        print("Label:", tokenizer.decode(datasets["val"][idx][-2]["input_ids"], skip_special_tokens=True), sep="\n")
+        print("Genrated:", tokenizer.decode(generate_goal(model, datasets["val"][idx], max_new_tokens), skip_special_tokens=True), sep="\n")
+    
+#     for split in ["train", "val"]:
+#         print('-' * 100, f"Split: {split}", '-' * 100, sep='\n')
+#         dataset = datasets[split]
+#         for idx in range(0, len(dataset), len(dataset) // 11):
+#             print('-' * 100)
+#             print("Label:", tokenizer.decode(dataset[idx][-1]["input_ids"], skip_special_tokens=True), sep="\n")
+#             print("Genrated:", tokenizer.decode(generate_proof(model, dataset[idx], max_new_tokens), skip_special_tokens=True), sep="\n")
+    
+#     for idx in range(0, 1000, 100):
+#         print('-' * 100)
+#         print("Label:", tokenizer.decode(datasets["val"][idx][-1]["input_ids"], skip_special_tokens=True), sep="\n")
+#         print("Genrated:", tokenizer.decode(generate_proof(model, datasets["val"][idx], max_new_tokens), skip_special_tokens=True), sep="\n")

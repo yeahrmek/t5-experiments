@@ -424,7 +424,11 @@ def get_datasets(cfg, tokenizer):
                                       exclude_relevant_lemmas=cfg.exclude_relevant_lemmas)
             datasets[split].filter_shorts()
             datasets[split].tokenize()
+<<<<<<< HEAD
             datasets[split].save_tokenized(str(data_dir / f"{split}_tokenized_test.ckpt"))
+=======
+            datasets[split].save_tokenized(str(data_dir / f"{split}_tokenized.ckpt"))
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 
         if hasattr(datasets[split], "split_to_segments"):
             datasets[split].split_to_segments(segment_size)
@@ -581,6 +585,7 @@ if __name__ == "__main__":
         model = get_base_model(cfg, tokenizer)
 
     datasets = get_datasets(cfg, tokenizer)
+<<<<<<< HEAD
     
 #     for i in range(0, 1000, 100):
 #         print('-' * 100)
@@ -588,6 +593,8 @@ if __name__ == "__main__":
 #             print(tokenizer.decode(seg["input_ids"]))
 #         print()
 #         print('-' * 100)
+=======
+>>>>>>> 7187ae7c663e368a789ad89c9b402451bd392618
 
     # find resume ckpt path
     max_n_segments_ckpt = 0

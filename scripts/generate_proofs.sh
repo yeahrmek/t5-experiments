@@ -30,7 +30,7 @@ input_size=512
 batch_size=32
 accumulate_grad_batches=16
 
-export CUDA_VISIBLE_DEVICES=3
+export CUDA_VISIBLE_DEVICES=5
 
 python generate_proofs.py \
   --task_name $task_name \

@@ -238,6 +238,7 @@ class RMTProofsDataset:
     def set_max_n_segments(self, max_n_segments: int) -> None:
         self._max_n_segments = max_n_segments
         
+
 #     def _filter_shorts_fun(self, x):
 #         proof_len = len(self.tokenizer.encode(f"[PROOFSTEP] {x['full_proof']}", 
 #                         truncation=False,
@@ -252,11 +253,21 @@ class RMTProofsDataset:
 #             x = 1/0
 #             print()
 #         return (proof_len + def_len <= self.segment_length - 2) and (def_len <= self.segment_length // 2)
+
+    def _filter_shorts_fun(self, x):
+        proof_len = len(self.tokenizer.encode(f"[PROOFSTEP] {x['full_proof']}", 
+                        truncation=False,
+                        padding=False))
+        def_len = len(self.tokenizer.encode(f"[PROOFSTEP] {x['decl_def']}", 
+                        truncation=False,
+                        padding=False))
+        return (proof_len + def_len <= self.segment_length) and (def_len <= self.segment_length // 2)
     
     def filter_shorts(self) -> None:
         """
         Drop long proofs and definitions
         """
+
         def _filter_shorts_fun(x):
             proof_len = len(self.tokenizer.encode(f"[PROOFSTEP] {x['full_proof']}", 
                             truncation=False,
@@ -342,7 +353,6 @@ class RMTProofsDataset:
                     return f"{t} {name}"
                 
                 randomized_lemmas = {x: re.sub(r'^(def|lemma|theorem) ([^\s]+)', repl_fun_for_lemmas, self.lemmas[x]) for x in self.lemmas.keys()}
-                
                 def repl_fun(matchobj):
                     t = matchobj.group(1) # lemma, theorem or def
                     prefix = matchobj.group(2)
@@ -381,7 +391,6 @@ class RMTProofsDataset:
                 decl_def_tokenized, proof_tokenized, args_defs_tokenized, lemmas_tokenized = self._tokenize(
                     dataset["decl_def"], dataset["full_proof"], dataset["args_defs"], randomized_lemmas
                 )
-                
                 self.tokenized["decl_def"].append(decl_def_tokenized)
                 self.tokenized["proof"].append(proof_tokenized)
                 self.tokenized["args"].append(args_defs_tokenized)
@@ -457,6 +466,11 @@ class RMTProofsDataset:
         """
         Return a list of `max_n_segments` segments with attention masks
         """
+        #print('in getitem', len(self.tokenized['decl_def']))
+        #print(self.tokenized["args"])
+        #print(len(self.tokenized["args"]))
+        #print(len(self.tokenized["args"][0]))
+        #print(len(self.tokenized["args"][0][0]))
         if self.use_random_lemmas_names:
             idx = random.randint(0, self.random_names_choices - 1)
             index %= len(self.tokenized["decl_def"][idx]) # some randomized datasets contain less rows than original one
@@ -473,7 +487,8 @@ class RMTProofsDataset:
         
 
         # pack lemmas into segments
-        packing = self._pack_agrs_with_irrelevant(args, lemmas_tokenized, self._max_n_segments - 1, self.segment_length - len(decl_def)) # 2 for [BOS] and [EOS]
+        packing = self._pack_agrs_with_irrelevant(args, lemmas_tokenized, self._max_n_segments - 1, self.segment_length - len(decl_def))
+        #packing = [[] for i in range(self._max_n_segments - 1)]
         
         packing.append(proof) # proof goes in separate segment
         
@@ -492,6 +507,10 @@ class RMTProofsDataset:
             #attention_mask[len(decl_def) + len(args_proof_ids) + 2:] = 0
             attention_mask[len(decl_def) + len(args_proof_ids):] = 0
             
+            ids[:len(decl_def)] = torch.LongTensor(decl_def)
+            ids[len(decl_def):len(decl_def) + len(args_proof_ids)] = torch.LongTensor(args_proof_ids)
+            attention_mask = torch.ones_like(ids, dtype=torch.long)
+            attention_mask[:len(decl_def) + len(args_proof_ids)] = 0
             labels = ids.clone()
             if self.tokenizer.pad_token_id is not None:
                 labels[labels == self.tokenizer.pad_token_id] = -100

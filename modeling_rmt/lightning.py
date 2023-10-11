@@ -184,7 +184,7 @@ class RMTModelPL(LightningModule):
                     if loss == None:
                         loss = out['loss'] # in this case there is only one segment and it contains a proof
                     else:
-                        loss += out['loss'] * self.cfg.proof_loss_weight
+                        loss += out['loss'] * self.cfg.proof_loss_w
                 batch_size += segment['input_ids'].shape[0]
         else:
             out = self(batch)
