@@ -510,7 +510,7 @@ class RMTProofsDataset:
             ids[:len(decl_def)] = torch.LongTensor(decl_def)
             ids[len(decl_def):len(decl_def) + len(args_proof_ids)] = torch.LongTensor(args_proof_ids)
             attention_mask = torch.ones_like(ids, dtype=torch.long)
-            attention_mask[:len(decl_def) + len(args_proof_ids)] = 0
+            attention_mask[len(decl_def) + len(args_proof_ids):] = 0
             labels = ids.clone()
             if self.tokenizer.pad_token_id is not None:
                 labels[labels == self.tokenizer.pad_token_id] = -100
